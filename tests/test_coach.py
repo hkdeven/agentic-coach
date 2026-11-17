@@ -13,7 +13,9 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "coach"))
 
+import build_site  # noqa: E402
 import common  # noqa: E402
+import config  # noqa: E402
 import extract  # noqa: E402
 import nudge  # noqa: E402
 import recap  # noqa: E402
@@ -365,6 +367,83 @@ class RecapTest(unittest.TestCase):
         self.assertEqual(p.stdout, b"")
 
 
+class ConfigTest(unittest.TestCase):
+    URL = "https://claude.ai/artifact/EXAMPLE-ONLY"     # synthetic, not a real page
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="coach-test-")
+        self.old_env = dict(os.environ)
+        os.environ["COACH_HOME"] = os.path.join(self.tmp, "coach-home")
+        os.environ["CLAUDE_CONFIG_DIR"] = os.path.join(self.tmp, "claude")
+        self.projects = os.path.join(self.tmp, "projects")
+        messy_session().write(self.projects)
+        self.today = datetime.date.fromtimestamp(BASE) + datetime.timedelta(days=1)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.old_env)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_defaults_when_there_is_no_file(self):
+        self.assertEqual(common.load_config(), {"page_url": None, "notify": False, "projects": []})
+        out = recap.build([], today=self.today, projects_dir=self.projects)
+        self.assertIsNone(out["page_url"])
+        self.assertFalse(out["notify"])
+        self.assertEqual(out["page_file"], os.path.join(self.tmp, "coach-home", "site", "index.html"))
+        self.assertEqual(out["page_build"][-1], "--card")
+        self.assertTrue(os.path.isfile(out["page_build"][0]))
+        self.assertFalse(os.path.exists(common.config_file()))     # reading never creates it
+
+    def test_set_show_unset(self):
+        self.assertIsNone(config.change(["set", "page_url", self.URL]))
+        self.assertIsNone(config.change(["set", "notify", "true"]))
+        self.assertEqual(common.load_config(), {"page_url": self.URL, "notify": True, "projects": []})
+        out = recap.build(["week"], today=self.today, projects_dir=self.projects)
+        self.assertEqual((out["page_url"], out["notify"]), (self.URL, True))
+        self.assertNotIn("--card", out["page_build"])
+        first = str(self.today - datetime.timedelta(days=3))
+        out = recap.build([first, str(self.today)], today=self.today, projects_dir=self.projects)
+        self.assertFalse(out["notify"])                     # a range never notifies
+        old = str(self.today - datetime.timedelta(days=5))
+        self.assertFalse(recap.build([old], today=self.today, projects_dir=self.projects)["notify"])
+        self.assertTrue(recap.build([], today=self.today, projects_dir=self.projects)["notify"])
+        self.assertIsNone(config.change(["unset", "page_url"]))
+        self.assertIsNone(config.change(["set", "notify", "false"]))
+        self.assertEqual(common.load_config(), {"page_url": None, "notify": False, "projects": []})
+
+    def test_bad_values_are_refused_or_ignored(self):
+        for bad in (["set", "page_url", "http://claude.ai/x"], ["set", "page_url", "https://example.com/x"],
+                    ["set", "page_url", "https://claude.ai/a b"], ["set", "notify", "yes"],
+                    ["set", "page_url", "https://claude.ai/a;rm -rf x"],
+                    ["set", "page_url", "https://claude.ai/$(id)"],
+                    ["set", "page_url", "https://claude.ai/x\n"],
+                    ["set", "other", "1"], ["unset", "notify"], []):
+            self.assertTrue(config.change(bad), bad)
+        self.assertFalse(os.path.exists(common.config_file()))
+        os.makedirs(os.path.dirname(common.config_file()))
+        for text in ("not json", "[]", '{"page_url": "https://example.com/x", "notify": "true"}',
+                     '{"page_url": 5, "notify": 1}'):
+            with open(common.config_file(), "w") as fh:
+                fh.write(text)
+            self.assertEqual(common.load_config(), {"page_url": None, "notify": False, "projects": []}, text)
+
+    def test_damaged_config_is_not_rewritten(self):
+        os.makedirs(os.path.dirname(common.config_file()))
+        broken = '{"page_url": "%s",}' % self.URL
+        with open(common.config_file(), "w") as fh:
+            fh.write(broken)
+        self.assertTrue(config.change(["set", "notify", "false"]))
+        with open(common.config_file()) as fh:
+            self.assertEqual(fh.read(), broken)
+
+    def test_page_is_built_under_coach_home_by_default(self):
+        recap.build([], today=self.today, projects_dir=self.projects)
+        self.assertEqual(build_site.main(["--projects-dir", self.projects, "--no-trends"]), 0)
+        self.assertTrue(os.path.isfile(common.site_file()))
+        self.assertTrue(common.site_file().startswith(self.tmp))
+        self.assertFalse(os.path.exists(os.path.join(ROOT, "site")))
+
+
 class SetupCheckTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="coach-test-")
@@ -455,6 +534,20 @@ class SetupCheckTest(unittest.TestCase):
         self.assertEqual(out["tasks"][0]["state"], "ok")
         self.assertEqual(out["tasks"][0]["duplicate_id"], "claude-coach-daily")
         self.assertFalse(out["clean"])
+
+    def test_page_status_and_stale_prompt(self):
+        self.task("agentic-coach-daily", "Run the skill /agentic-coach:coach and follow it exactly. "
+                                         "Read only apart from the one report file.")
+        self.task("agentic-coach-weekly", setup_check.task_prompt("agentic-coach-weekly"))
+        out = setup_check.check()
+        self.assertEqual([t["state"] for t in out["tasks"]], ["ok", "ok"])
+        self.assertEqual([t["prompt_current"] for t in out["tasks"]], [False, True])
+        self.assertFalse(out["clean"])
+        self.assertEqual(out["page"]["published"], False)
+        self.assertEqual(out["page"]["notify"], False)
+        self.assertEqual(out["page"]["built"], False)
+        config.change(["set", "notify", "true"])
+        self.assertTrue(setup_check.check()["page"]["notify"])
 
     def test_clean_when_both_schedules_run_the_skill(self):
         for t in ("agentic-coach-daily", "agentic-coach-weekly"):

@@ -24,9 +24,13 @@ import time
 
 try:
     from . import common as C
+    from . import pricing as P
+    from . import projects as PR
 except ImportError:  # run as a script
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import common as C
+    import pricing as P
+    import projects as PR
 
 TS_KEY = b'"timestamp":"'
 IDLE_SEC = 300          # gaps shorter than this count as active time
@@ -39,9 +43,17 @@ UNTIMED_TYPES = (b'{"type":"ai-title"', b'{"type":"custom-title"')
 class SessionAcc(object):
     """Accumulates one session's records into counters."""
 
-    def __init__(self, session_id, allow_sidechain=False):
+    def __init__(self, session_id, allow_sidechain=False, claimed=None, owner=None):
         self.id = session_id
         self.allow_sidechain = allow_sidechain
+        # claimed: {message id: owner} for messages already counted in this run.
+        # A resumed or forked session copies its parent's records into a new
+        # transcript; they are counted once, for the transcript that had them first.
+        # owner names this transcript, so its own day slices do not block each other.
+        self._claimed = claimed
+        self._owner = owner if owner is not None else id(self)
+        self._by_mid = {}           # message id -> the usage last counted for it
+        self._foreign = set()       # message ids another transcript already counted
         self.cwd = None
         self.first = None
         self.last = None
@@ -70,9 +82,9 @@ class SessionAcc(object):
         self.denied = {}            # (tool, family, kind) -> count
         self.compactions = []
         self.tok = {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0}
+        self.by_model = {}          # model key -> the five counts pricing.py prices
         self.peak_context = 0
         self._mid = None
-        self._usage = None
         self.models = collections.Counter()
         self.big_results = []
         self.big_count = 0
@@ -139,21 +151,17 @@ class SessionAcc(object):
             self.custom_title = d.get("customTitle") or self.custom_title
 
     def _assistant(self, d):
-        m = d.get("message") or {}
-        mid = m.get("id")
-        model = m.get("model")
+        m = d.get("message")
+        m = m if isinstance(m, dict) else {}
+        mid = m.get("id") if isinstance(m.get("id"), str) else None
+        model = m.get("model") if isinstance(m.get("model"), str) else None
         u = m.get("usage")
         if isinstance(u, dict):
-            cur = (u.get("input_tokens") or 0, u.get("output_tokens") or 0,
-                   u.get("cache_read_input_tokens") or 0,
-                   u.get("cache_creation_input_tokens") or 0)
-            if mid != self._mid or mid is None:
-                self._commit_usage()
-                if model and model != "<synthetic>":
-                    self.models[model] += 1
+            counts = P.usage_counts(u)
+            cur = (P.model_key(model, u), counts)
+            self._count_usage(mid, model, cur)
             self._mid = mid
-            self._usage = cur
-            ctx = cur[0] + cur[2] + cur[3]
+            ctx = counts[0] + counts[2] + counts[3] + counts[4]
             if ctx > self.peak_context:
                 self.peak_context = ctx
         if d.get("isApiErrorMessage"):
@@ -187,13 +195,47 @@ class SessionAcc(object):
             elif name == "Workflow":
                 self.workflows += 1
 
+    def _count_usage(self, mid, model, cur):
+        """Count one message's usage exactly once.
+
+        Claude Code writes one record per content block, each repeating the
+        message id and its usage, and the same id can come back after other
+        messages or in a resumed copy of the session. The last usage seen for an
+        id is the one that counts.
+        """
+        if mid is not None:
+            if mid in self._foreign:
+                return
+            prev = self._by_mid.get(mid)
+            if prev is None:
+                if self._claimed is not None:
+                    if self._claimed.setdefault(mid, self._owner) != self._owner:
+                        self._foreign.add(mid)
+                        return
+                if model and model != "<synthetic>":
+                    self.models[model] += 1
+            else:
+                self._apply(prev, -1)
+            self._by_mid[mid] = cur
+        elif model and model != "<synthetic>":
+            self.models[model] += 1
+        self._apply(cur, 1)
+
+    def _apply(self, cur, sign):
+        key, c = cur
+        self.tok["in"] += sign * c[0]
+        self.tok["out"] += sign * c[1]
+        self.tok["cache_read"] += sign * c[2]
+        self.tok["cache_write"] += sign * (c[3] + c[4])
+        if key.partition("+")[0] != "<synthetic>" and sum(c):
+            block = self.by_model.setdefault(key, [0] * P.N)
+            for i in range(P.N):
+                block[i] += sign * c[i]
+            if not any(block):
+                del self.by_model[key]
+
     def _commit_usage(self):
-        if self._usage:
-            self.tok["in"] += self._usage[0]
-            self.tok["out"] += self._usage[1]
-            self.tok["cache_read"] += self._usage[2]
-            self.tok["cache_write"] += self._usage[3]
-        self._usage = None
+        """Kept for callers; usage is counted as it is read."""
 
     def _user(self, d, ep, prev):
         m = d.get("message") or {}
@@ -339,6 +381,36 @@ class SessionAcc(object):
         self._commit_usage()
 
 
+def cost_block(by_model):
+    """The cost fields written beside a token block."""
+    c = P.cost(by_model)
+    out = collections.OrderedDict()
+    out["usd"] = round(c["usd"], 2)
+    out["text"] = P.fmt_usd(c["usd"])
+    out["by_type_usd"] = dict((k, round(v, 2)) for k, v in c["by_type"].items())
+    if c["unpriced_tokens"]:
+        out["unpriced_tokens"] = c["unpriced_tokens"]
+        out["unpriced_models"] = c["unpriced_models"]
+    return out
+
+
+def merge_models(*maps):
+    out = {}
+    for m in maps:
+        for key, block in (m or {}).items():
+            P.add(out.setdefault(key, [0] * P.N), block)
+    return out
+
+
+def session_title(a):
+    return a.custom_title or (a.titles[0] if a.titles else "")
+
+
+def project_name(a, pdir, rules):
+    no_folder = not a.cwd and "scratch-workspaces" in (pdir or "")
+    return PR.resolve(a.cwd or "", session_title(a), rules, no_folder=no_folder)
+
+
 # ---------- scanning ----------
 
 def scan_file(path, lo_iso, hi_iso, acc, seen=None):
@@ -380,7 +452,10 @@ def scan_file(path, lo_iso, hi_iso, acc, seen=None):
                     if uid in seen:
                         continue
                     seen.add(uid)
-            acc.feed(d)
+            try:
+                acc.feed(d)
+            except (AttributeError, TypeError, ValueError, KeyError):
+                continue                  # one malformed record must not stop the run
     return size
 
 
@@ -405,15 +480,26 @@ def find_sessions(projects_dir, lo, session=None, project=None):
     return out
 
 
-def scan_subagents(session_path, lo, lo_iso, hi_iso):
+def oldest_first(sessions):
+    """Session files by creation order, so an original is counted before its resumed copies."""
+    def born(item):
+        try:
+            st = os.stat(item[0])
+            return (getattr(st, "st_birthtime", st.st_mtime), item[0])
+        except OSError:
+            return (0, item[0])
+    return sorted(sessions, key=born)
+
+
+def scan_subagents(session_path, lo, lo_iso, hi_iso, claimed=None):
     """Light totals for a session's subagent transcripts."""
     sub_dir = os.path.join(session_path[:-6], "subagents")
     if not os.path.isdir(sub_dir):
         return None
     files = 0
     seen = set()
-    agg = SessionAcc("sub", allow_sidechain=True)
-    for p in glob.glob(os.path.join(sub_dir, "*.jsonl")):
+    agg = SessionAcc("sub", allow_sidechain=True, claimed=claimed, owner=session_path + "/sub")
+    for p in sorted(glob.glob(os.path.join(sub_dir, "*.jsonl"))):
         try:
             if os.stat(p).st_mtime < lo:
                 continue
@@ -429,7 +515,8 @@ def scan_subagents(session_path, lo, lo_iso, hi_iso):
         return None
     top = sorted(agg.fails.items(), key=lambda kv: -kv[1][0])[:3]
     return {"files": files, "tool_calls": agg.tool_calls, "errors": agg.errors_total,
-            "tokens": dict(agg.tok),
+            "tokens": dict(agg.tok), "cost": cost_block(agg.by_model),
+            "models_tokens": dict(agg.by_model),
             "repeated_fails": [{"cmd": k[:160], "fails": v[0], "err": v[1][:100]}
                                for k, v in top if v[0] >= 3]}
 
@@ -542,6 +629,9 @@ def render_session(a, pdir, prompt_chars, max_prompts):
     tok = collections.OrderedDict(a.tok)
     tok["peak_context"] = a.peak_context
     s["tokens"] = tok
+    s["cost"] = cost_block(a.by_model)
+    s["models_tokens"] = dict(a.by_model)
+    s["project_name"] = getattr(a, "project", None) or project_name(a, pdir, None)
     if a.big_results:
         big = sorted(a.big_results, key=lambda r: -r["chars"])[:4]
         s["big_results"] = {"count": a.big_count, "chars": a.big_chars,
@@ -680,7 +770,11 @@ def build(accs, lo, hi, max_bytes, extras):
                 digest["minor_sessions"] = [
                     {"id": a.id[:8], "project": project_label(a.cwd, pdir), "kind": a.kind,
                      "turns": len(a.prompts), "tool_calls": a.tool_calls,
-                     "out_tokens": a.tok["out"]} for a, pdir in minor]
+                     "out_tokens": a.tok["out"],
+                     "project_name": getattr(a, "project", None) or project_name(a, pdir, None),
+                     "usd": round(P.cost(merge_models(a.by_model,
+                                                      (a.sub or {}).get("models_tokens")))["usd"], 2)}
+                    for a, pdir in minor]
             blob = _dump(digest)
             if not max_bytes or len(blob.encode("utf-8")) <= max_bytes:
                 return digest, blob
@@ -689,23 +783,85 @@ def build(accs, lo, hi, max_bytes, extras):
         minor_n = min(len(ordered), minor_n + max(1, len(ordered) // 8))
 
 
+def project_totals(accs):
+    """Tokens and dollars by project, most costly first, main and subagents apart."""
+    groups = collections.OrderedDict()
+    for a, _pdir in accs:
+        g = groups.setdefault(a.project, {"sessions": 0, "scheduled": 0, "main": {}, "sub": {}})
+        g["sessions"] += 1
+        if a.kind == "scheduled":
+            g["scheduled"] += 1
+        g["main"] = merge_models(g["main"], a.by_model)
+        g["sub"] = merge_models(g["sub"], (a.sub or {}).get("models_tokens"))
+    out = []
+    for name, g in groups.items():
+        main, subc = P.cost(g["main"]), P.cost(g["sub"])
+        tokens = P.add(list(main["tokens"]), subc["tokens"])
+        row = collections.OrderedDict()
+        row["name"] = name
+        row["sessions"] = g["sessions"]
+        if g["scheduled"]:
+            row["scheduled_sessions"] = g["scheduled"]
+        row["tokens"] = {"in": tokens[0], "out": tokens[1], "cache_read": tokens[2],
+                         "cache_write": tokens[3] + tokens[4]}
+        row["usd"] = round(main["usd"] + subc["usd"], 2)
+        row["main_usd"] = round(main["usd"], 2)
+        row["subagent_usd"] = round(subc["usd"], 2)
+        row["text"] = P.fmt_usd(main["usd"] + subc["usd"])
+        unpriced = main["unpriced_tokens"] + subc["unpriced_tokens"]
+        if unpriced:
+            row["unpriced_tokens"] = unpriced
+        out.append(row)
+    out.sort(key=lambda r: (-r["usd"], r["name"]))
+    return out
+
+
+def cost_totals(accs):
+    """Dollars for the whole range: overall, main against subagents, by type and by model."""
+    main = merge_models(*[a.by_model for a, _ in accs])
+    subs = merge_models(*[(a.sub or {}).get("models_tokens") for a, _ in accs])
+    both = merge_models(main, subs)
+    cm, cs, ca = P.cost(main), P.cost(subs), P.cost(both)
+    out = collections.OrderedDict()
+    out["usd"] = round(ca["usd"], 2)
+    out["text"] = P.fmt_usd(ca["usd"])
+    out["main_usd"] = round(cm["usd"], 2)
+    out["subagent_usd"] = round(cs["usd"], 2)
+    out["by_type_usd"] = dict((k, round(v, 2)) for k, v in ca["by_type"].items())
+    models = []
+    for key in both:
+        c = P.cost({key: both[key]})
+        models.append({"model": key, "name": P.display_name(key), "tokens": sum(both[key]),
+                       "usd": round(c["usd"], 2), "priced": not c["unpriced_tokens"]})
+    models.sort(key=lambda m: (-m["usd"], -m["tokens"]))
+    out["by_model"] = models
+    out["unpriced_tokens"] = ca["unpriced_tokens"]
+    out["meaning"] = "API-equivalent at list prices, not a bill"
+    out["prices_date"] = P.prices_date()
+    return out
+
+
 def run(since, until, session=None, project=None, max_bytes=150000,
-        projects_dir=None, subagents=True, inventory=True):
+        projects_dir=None, subagents=True, inventory=True, rules=None):
     projects_dir = projects_dir or C.PROJECTS_DIR
+    if rules is None:
+        rules = C.load_config().get("projects")
     lo_iso, hi_iso = C.epoch_utc_iso(since), C.epoch_utc_iso(until)
     accs = []
     repeated = {}
     listed = set()
     scanned = 0
-    for path, sid, pdir, _size in find_sessions(projects_dir, since, session, project):
-        a = SessionAcc(sid)
+    claimed = {}
+    for path, sid, pdir, _size in oldest_first(find_sessions(projects_dir, since, session, project)):
+        a = SessionAcc(sid, claimed=claimed, owner=path)
         scanned += scan_file(path, lo_iso, hi_iso, a)
         a.finish()
-        if a.first is None or (not a.prompts and not a.tool_calls):
-            continue
+        if a.first is None or (not a.prompts and not a.tool_calls and not a.by_model):
+            continue                      # nothing happened; a session that spent tokens stays
         if subagents:
-            a.sub = scan_subagents(path, since, lo_iso, hi_iso)
+            a.sub = scan_subagents(path, since, lo_iso, hi_iso, claimed)
         listed.update(a.skills_listed)
+        a.project = project_name(a, pdir, rules)
         accs.append((a, pdir))
         if a.kind != "scheduled":
             for p in a.prompts:
@@ -754,6 +910,9 @@ def run(since, until, session=None, project=None, max_bytes=150000,
     totals["plan_mode_used"] = bool(modes.get("plan") or tools.get("ExitPlanMode")
                                     or tools.get("EnterPlanMode"))
     totals["bytes_scanned"] = scanned
+    totals["cost"] = cost_totals(accs)
+    totals["models_tokens"] = merge_models(*[merge_models(a.by_model, (a.sub or {}).get("models_tokens"))
+                                             for a, _ in accs])
 
     rep = []
     for g in sorted(repeated.values(), key=lambda g: (-len(g["sessions"]), -g["n"])):
@@ -766,6 +925,7 @@ def run(since, until, session=None, project=None, max_bytes=150000,
 
     extras = collections.OrderedDict()
     extras["totals"] = totals
+    extras["projects"] = project_totals(accs)
     extras["repeated_prompts"] = rep
     perm = read_permission_log(since, until)
     if perm is not None:
