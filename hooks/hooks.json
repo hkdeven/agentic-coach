@@ -1,0 +1,27 @@
+{
+  "description": "agentic-coach: one coaching line at the end of a turn when something costly just happened, and a local log of permission prompts. Both stay on this machine and never block.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/coach/nudge.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/coach/permlog.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

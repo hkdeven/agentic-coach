@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.DS_Store
+# Reports and digests quote your own sessions. They live in ~/.claude/coach/reports, never here.
+reports/

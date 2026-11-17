@@ -1,0 +1,16 @@
+{
+  "name": "agentic-coach",
+  "description": "Coaches you on your own Claude Code usage: reads your session transcripts on your machine, shows where time and tokens went and which feature would have helped, as a daily recap, a weekly review with proposed changes, and a one-line nudge at the end of a costly turn. Nothing leaves the machine.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Deven Blackburn"
+  },
+  "repository": "https://github.com/hkdeven/agentic-coach",
+  "keywords": [
+    "coaching",
+    "usage",
+    "productivity",
+    "transcripts",
+    "hooks"
+  ]
+}
