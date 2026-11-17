@@ -1,5 +1,5 @@
 {
-  "description": "agentic-coach: one coaching line at the end of a turn when something costly just happened, and a local log of permission prompts. Both stay on this machine and never block.",
+  "description": "agentic-coach: one coaching line at the end of a turn when something costly just happened, a local log of permission prompts, and a local note of which account a session started under (short form only). All stay on this machine and never block.",
   "hooks": {
     "Stop": [
       {
@@ -7,6 +7,18 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/coach/nudge.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/coach/accounts.py\" hook",
             "timeout": 5
           }
         ]

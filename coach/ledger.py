@@ -15,6 +15,11 @@ Rules:
   scan on a later date: its sessions are only replaced by fuller versions of
   themselves. A thinner scan, after transcripts were cleaned up, never
   overwrites or removes anything.
+- Work that config.json says is never to be shown (an "exclude" rule, another
+  account than "only_account", a day in "exclude_dates") is never written,
+  and rows already recorded for it are removed. This is the one case where the
+  ledger ends up holding less; the run says how many sessions were removed.
+  A change to those settings makes the next run read every transcript once.
 - Project names are the names resolved when the day was written. After the
   project rules change, `backfill --rebuild` re-resolves the sessions whose
   transcripts are still complete and leaves older ones as they were.
@@ -41,6 +46,8 @@ if HERE not in sys.path:
 import common as C  # noqa: E402
 import extract as E  # noqa: E402
 import pricing as P  # noqa: E402
+import projects as PR  # noqa: E402
+import scope as SC  # noqa: E402
 
 VERSION = 1
 
@@ -104,8 +111,13 @@ def _day_of(first, last):
     return day_of
 
 
-def _route(path, get_acc, day_of, seen=None):
-    """Feed each record of one transcript to the accumulator of its local day."""
+def _route(path, get_acc, day_of, seen=None, meta=None, keep=None):
+    """Feed each record of one transcript to the accumulator of its local day.
+
+    meta: an accumulator that takes the session's title records, which belong to
+    the whole session whatever the days being scanned. keep: an optional
+    function from a local day to True or False (scope.Gate).
+    """
     cur = None
     try:
         fh = open(path, "rb")
@@ -113,12 +125,21 @@ def _route(path, get_acc, day_of, seen=None):
         return
     with fh:
         for line in fh:
+            if line.startswith(E.UNTIMED_TYPES):
+                if meta is not None:
+                    try:
+                        d = json.loads(line)
+                        if isinstance(d, dict) and d.get("type") in ("ai-title", "custom-title"):
+                            meta.feed({"type": d["type"], "aiTitle": d.get("aiTitle"),
+                                       "customTitle": d.get("customTitle")})
+                    except (ValueError, AttributeError, TypeError, KeyError):
+                        pass
+                continue
             i = line.rfind(E.TS_KEY)
-            if i >= 0:
-                cur = day_of(line[i + 13:i + 32].decode("ascii", "replace"))
-                if cur is None:
-                    continue
-            elif cur is None or not line.startswith(E.UNTIMED_TYPES):
+            if i < 0:
+                continue
+            cur = day_of(line[i + 13:i + 32].decode("ascii", "replace"))
+            if cur is None or (keep is not None and not keep(cur)):
                 continue
             try:
                 d = json.loads(line)
@@ -130,7 +151,7 @@ def _route(path, get_acc, day_of, seen=None):
             ts = d.get("timestamp")
             if isinstance(ts, str):
                 k = day_of(ts[:19])
-                if k is None:
+                if k is None or (keep is not None and not keep(k)):
                     continue
             if seen is not None:
                 uid = d.get("uuid")
@@ -144,11 +165,24 @@ def _route(path, get_acc, day_of, seen=None):
                 continue                  # one malformed record must not stop the scan
 
 
-def scan(projects_dir=None, first=None, last=None, rules=None):
-    """Transcripts on disk to {day: day entry}. first and last are local days, both included."""
+def scan(projects_dir=None, first=None, last=None, rules=None, session_projects=None,
+         exclude=None, info=None, scope=None, other=None):
+    """Transcripts on disk to {day: day entry}. first and last are local days, both included.
+
+    scope: what may be shown (scope.Scope); built from config.json when not given.
+    info: an optional dict; on return info["excluded"] is the set of session ids
+    with nothing left to show, info["seen"] every session id read, and
+    info["scope"] the scope used.
+    """
     projects_dir = projects_dir or C.PROJECTS_DIR
-    if rules is None:
-        rules = C.load_config().get("projects")
+    naming = E.Naming(rules, session_projects, other)
+    scope = SC.from_args(scope, exclude)
+    dropped = scope.gone
+    seen_ids = set()
+    if info is not None:
+        info["excluded"] = dropped
+        info["seen"] = seen_ids
+        info["scope"] = scope
     lo = C.parse_when(first) - 86400 if first else 0
     day_of = _day_of(first, last)
     days = {}
@@ -167,7 +201,10 @@ def scan(projects_dir=None, first=None, last=None, rules=None):
                                        owner=path + "/sub")
             return subs[k]
 
-        _route(path, get_acc, day_of)
+        probe = E.SessionAcc(sid)
+        gate = scope.gate(sid, path)
+        seen_ids.add(sid)
+        _route(path, get_acc, day_of, meta=probe, keep=gate)
         sub_dir = os.path.join(path[:-6], "subagents")
         if os.path.isdir(sub_dir):
             seen = set()
@@ -177,20 +214,20 @@ def scan(projects_dir=None, first=None, last=None, rules=None):
                         continue
                 except OSError:
                     continue
-                _route(p, get_sub, day_of, seen)
+                _route(p, get_sub, day_of, seen, keep=gate)
         if not accs and not subs:
+            if first is None and last is None:
+                scope.emptied(sid, gate)     # every transcript day was read: nothing is left
             continue
         for a in accs.values():
             a.finish()
         scheduled = any(a.kind == "scheduled" for a in accs.values())
         named = [a for a in accs.values() if a.cwd] or list(accs.values())
-        titled = [a for a in accs.values() if E.session_title(a)]
-        probe = E.SessionAcc(sid)
         if named:
             probe.cwd = named[0].cwd
-        if titled:
-            probe.custom_title = E.session_title(titled[0])
-        project = E.project_name(probe, pdir, rules)
+        project = naming.name(probe, pdir)
+        if scope.hidden(probe, pdir, project):
+            continue
         for day in set(accs) | set(subs):
             main = accs[day].by_model if day in accs else {}
             sub = subs[day].by_model if day in subs else {}
@@ -223,6 +260,13 @@ def _clean(raw):
     led = {"version": VERSION, "first_day": None, "days": {}}
     if not isinstance(raw, dict) or not isinstance(raw.get("days"), dict):
         return led
+    if isinstance(raw.get("exclude_sig"), str):
+        led["exclude_sig"] = raw["exclude_sig"]
+    if isinstance(raw.get("excluded"), list):
+        led["excluded"] = sorted(set(x for x in raw["excluded"] if isinstance(x, str) and x))
+    if isinstance(raw.get("filter"), dict):
+        led["filter"] = dict((k, v) for k, v in raw["filter"].items()
+                             if isinstance(k, str) and isinstance(v, int))
     for day, entry in raw["days"].items():
         if not is_day(day) or not isinstance(entry, dict) or not isinstance(entry.get("sessions"), dict):
             continue
@@ -307,7 +351,7 @@ def save(led, path=None):
             os.remove(tmp)
 
 
-def upsert(led, scanned, rebuild=False):
+def upsert(led, scanned, rebuild=False, restore=()):
     """Merge scanned days in. Nothing recorded is ever replaced by less, or counted twice.
 
     A day that was recorded after it was over is closed: its tokens never change
@@ -318,6 +362,10 @@ def upsert(led, scanned, rebuild=False):
     A day recorded while it was still running is open: each of its sessions is
     replaced by a fuller version of itself, sessions are added, none is removed.
     It closes the first time it is scanned on a later date.
+
+    restore: ids of sessions that were left out whole until now and may be
+    shown again (a rule was removed). Their rows are put back on closed days
+    too; they are known sessions, not copies of deleted ones.
 
     rebuild: for re-resolving project names after the rules changed. A session
     whose scan has exactly the tokens the ledger has takes its new name, on open
@@ -341,7 +389,7 @@ def upsert(led, scanned, rebuild=False):
         for sid, sess in new["sessions"].items():
             cur = old["sessions"].get(sid)
             if cur is None:
-                if frozen:
+                if frozen and sid not in restore:
                     held = True
                 else:
                     old["sessions"][sid] = sess
@@ -371,27 +419,141 @@ def upsert(led, scanned, rebuild=False):
     return out
 
 
-def backfill(projects_dir=None, rules=None, path=None, rebuild=False):
+def purge(led, scope, sids=(), seen=None):
+    """Remove every row that may not be shown. Returns the set of session ids that lost a row.
+
+    A row goes when its day is in exclude_dates; when its session id is in sids
+    (sessions a scan just found to have nothing left); when the scan dropped
+    that session on that day for its account; when an exclude rule names its id
+    or fits the project name it was written with (all that is left to test once
+    the transcript is gone); or, for a session the scan did not read (seen is
+    the set it did read), when the account evidence that needs no transcript
+    says another account. This is the one place the ledger gives up what it holds.
+    """
+    gone = set()
+    sids = set(sids)
+    if not scope.on and not sids:
+        return gone
+    gates = {}
+    for day in list(led["days"]):
+        entry = led["days"][day]
+        whole_day = scope.date_hidden(day)
+        for sid in list(entry["sessions"]):
+            drop = (whole_day or sid in sids or (sid, day) in scope.dropped_days
+                    or PR.excluded(scope.rules, sid, [entry["sessions"][sid]["project"]]))
+            if not drop and scope.only and seen is not None and sid not in seen:
+                if sid not in gates:
+                    gates[sid] = scope.gate(sid, None)
+                drop = not gates[sid](day)
+            if drop:
+                del entry["sessions"][sid]
+                gone.add(sid)
+        if not entry["sessions"]:
+            del led["days"][day]
+        else:
+            entry["total"] = day_tokens(entry)
+    led["first_day"] = min(led["days"]) if led["days"] else None
+    return gone
+
+
+def visible(led, scope=None):
+    """The ledger as it may be shown: rows of left-out work taken out, in memory only."""
+    scope = scope or SC.Scope()
+    if scope.on:
+        purge(led, scope)
+    return led
+
+
+def _apply_scope(led, scope, info, reset):
+    """Purge what may not be shown. Returns how many sessions lost at least one row.
+
+    Call _note_excluded after the scanned days were merged in, to bring the short
+    list of left-out sessions up to date.
+    """
+    found = set((info or {}).get("excluded") or ())
+    gone = purge(led, scope, found, (info or {}).get("seen") if reset else None)
+    (info if info is not None else {})["purged"] = gone
+    led["exclude_sig"] = scope.sig()
+    if reset or "filter" not in led:
+        led["filter"] = scope.counts() if scope.on else {}
+    return len(gone)
+
+
+def _restorable(led, info):
+    """Sessions on the left-out list that this full scan read and did not leave out."""
+    was = set(led.get("excluded") or [])
+    out_now = set((info or {}).get("excluded") or ())
+    return set(sid for sid in (info or {}).get("seen") or ()
+               if sid[:PR.MIN_ID] in was and sid not in out_now)
+
+
+def _note_excluded(led, scope, info, full):
+    """Keep the short list (first 8 characters of each id) of sessions that are
+    left out whole. It lets the page drop items of old reports that cite one.
+
+    full: every transcript on disk was just read. Then a session that was read
+    is on the list only if this scan left it out, so a rule that was removed
+    stops hiding it. A session that was not read (its transcript is gone) can
+    no longer be tested and stays on the list while any rule is in force:
+    staying hidden is the safe side. A session with rows is never on the list.
+    """
+    if not scope.on:
+        led["excluded"] = []
+        return
+    info = info or {}
+    ids = set(led.get("excluded") or [])
+    if full:
+        ids -= set(s[:PR.MIN_ID] for s in info.get("seen") or ())
+    still = set(sid for entry in led["days"].values() for sid in entry["sessions"])
+    ids.update(s[:PR.MIN_ID] for s in set(info.get("excluded") or ())
+               | (set(info.get("purged") or ()) - still))
+    ids -= set(s[:PR.MIN_ID] for s in still)
+    led["excluded"] = sorted(ids)
+
+
+def backfill(projects_dir=None, rules=None, path=None, rebuild=False, exclude=None, scope=None):
     """Walk every transcript still on disk and merge it in. Safe to run again and again."""
     led, _seed = _open_for_write(path)
-    result = upsert(led, scan(projects_dir, rules=rules), rebuild)
+    scope = SC.from_args(scope, exclude)
+    info = {}
+    scanned = scan(projects_dir, rules=rules, info=info, scope=scope)
+    removed = _apply_scope(led, scope, info, reset=True)
+    result = upsert(led, scanned, rebuild, _restorable(led, info))
+    _note_excluded(led, scope, info, full=True)
     save(led, path)
     result["first_day"] = led["first_day"]
     result["days"] = len(led["days"])
+    result["excluded_removed"] = removed
+    result["excluded_sessions"] = len(led["excluded"])
+    result["filter"] = led.get("filter") or {}
     return result
 
 
-def update(first, last, projects_dir=None, rules=None, path=None):
-    """What a recap calls: add the days it covers. Seeds the whole ledger once if it is missing."""
+def update(first, last, projects_dir=None, rules=None, path=None, exclude=None, scope=None):
+    """What a recap calls: add the days it covers. Seeds the whole ledger once if it is missing.
+
+    When the settings for what may be shown changed since the last run, every
+    transcript is read once more so that rows already recorded for work that is
+    now left out are removed.
+    """
     led, seeded = _open_for_write(path)
-    if seeded or not led["days"]:
-        scanned = scan(projects_dir, rules=rules)
+    scope = SC.from_args(scope, exclude)
+    changed = led.get("exclude_sig", "") != scope.sig()
+    info = {}
+    full = seeded or not led["days"] or changed
+    if full:
+        scanned = scan(projects_dir, rules=rules, info=info, scope=scope)
     else:
         # from the last day on record, so days a missed run skipped are filled in too
-        scanned = scan(projects_dir, min(first, max(led["days"])), last, rules=rules)
-    result = upsert(led, scanned)
+        scanned = scan(projects_dir, min(first, max(led["days"])), last, rules=rules,
+                       info=info, scope=scope)
+    removed = _apply_scope(led, scope, info, reset=full)
+    result = upsert(led, scanned, restore=_restorable(led, info) if full else ())
+    _note_excluded(led, scope, info, full=full)
     save(led, path)
     result["seeded"] = seeded
+    result["excluded_removed"] = removed
+    result["excluded_sessions"] = len(led["excluded"])
     return led, result
 
 
@@ -562,6 +724,8 @@ def main(argv=None):
         sys.stdout.write("added %d days, refreshed %d; on %d days the ledger holds more than the "
                          "transcripts now do, and what it holds was kept\n"
                          % (len(r["added"]), len(r["replaced"]), len(r["kept"])))
+        if r.get("excluded_removed"):
+            sys.stdout.write("%d excluded sessions removed\n" % r["excluded_removed"])
         if args.rebuild:
             sys.stdout.write("Project names were re-resolved for every session whose transcript is "
                              "still complete on disk (%d days changed). Sessions older than the "
@@ -570,6 +734,7 @@ def main(argv=None):
         return 0
     if args.cmd == "show":
         led, existed = load()
+        visible(led)
         if not existed or not led["days"]:
             sys.stdout.write("The ledger is empty. Run: python3 coach/ledger.py backfill\n")
             return 0
@@ -591,4 +756,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(C.run_main(main))

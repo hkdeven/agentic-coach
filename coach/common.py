@@ -52,32 +52,204 @@ def valid_page_url(url):
             and bool(re.fullmatch(r"https://claude\.ai/[A-Za-z0-9/_.-]+", url)))
 
 
-def load_config():
-    """{"page_url": str or None, "notify": bool, "projects": [rules]}. A missing or broken
-    file is all defaults.
+def _clean_exclude(raw):
+    """The "exclude" key as (rules, usable). rules is a list of
+    {"match": [...], "sessions": [...]}. usable is False when any part of the
+    value had to be dropped: a rule that is not an object, an unknown key (a
+    misspelt one would silently hide nothing), an empty rule, a text that is
+    not a string, a session id shorter than 8 characters."""
+    out = []
+    ok = isinstance(raw, list)
+    for rule in raw if isinstance(raw, list) else []:
+        if not isinstance(rule, dict) or set(rule) - set(("match", "sessions")):
+            ok = False
+            continue
+        clean = {}
+        for key, least in (("match", 1), ("sessions", 8)):
+            if key not in rule:
+                continue
+            given = rule[key]
+            given = [given] if isinstance(given, str) else given
+            if not isinstance(given, list):
+                ok = False
+                continue
+            texts = [t.strip() for t in given if isinstance(t, str) and len(t.strip()) >= least]
+            if len(texts) != len(given):
+                ok = False
+            if texts:
+                clean[key] = texts
+        if clean:
+            out.append(clean)
+        else:
+            ok = False
+    return out, ok
 
-    projects: the person's own project rules, a list of
-    {"name": "...", "match": ["substring or glob", ...]}; see projects.py.
+
+def run_main(main):
+    """Run a script's main(); a settings file that cannot be trusted ends it with
+    one plain line and exit code 2, never a traceback and never a guess."""
+    import sys
+    try:
+        return main()
+    except ConfigError as e:
+        sys.stderr.write("coach: %s\n" % e)
+        return 2
+
+
+_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _real_day(text):
+    if not isinstance(text, str) or not _DAY_RE.match(text):
+        return False
+    try:
+        time.strptime(text, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+
+def parse_date_range(text):
+    """"2026-01-05", "2026-01-01..2026-01-31", "..2026-01-31" or "2026-01-01.." to
+    (first day or None, last day or None). None when the text is none of these."""
+    if not isinstance(text, str):
+        return None
+    text = text.strip()
+    if ".." in text:
+        lo, _, hi = text.partition("..")
+        lo, hi = lo.strip() or None, hi.strip() or None
+        if lo is None and hi is None:
+            return None
+    else:
+        lo = hi = text
+    for d in (lo, hi):
+        if d is not None and not _real_day(d):
+            return None
+    if lo and hi and hi < lo:
+        lo, hi = hi, lo
+    return (lo, hi)
+
+
+def day_lookup():
+    """A function from a UTC timestamp string to its local day (YYYY-MM-DD), with a cache."""
+    cache = {}
+
+    def day_of(ts):
+        key = ts[:16]
+        if key not in cache:
+            ep = ts_epoch(key + ":00")
+            if len(cache) > 400000:
+                cache.clear()
+            cache[key] = time.strftime("%Y-%m-%d", time.localtime(ep)) if ep is not None else None
+        return cache[key]
+    return day_of
+
+
+class ConfigError(Exception):
+    """config.json cannot be trusted to say what must be left out."""
+
+
+def config_problem():
+    return ("%s cannot be read as the coach's settings (not valid JSON, or one of exclude, "
+            "only_account, unknown_account, exclude_dates has a value that cannot be used). "
+            "Nothing was built, so that nothing you chose to leave out is shown by mistake. "
+            "Fix or delete the file, then run again." % config_file())
+
+
+def load_config():
+    """The person's settings, with defaults for whatever is missing. A missing or
+    broken file is all defaults.
 
     page_url: the person's own private page link, set only when they chose to
     publish the page. notify: send one push notification per run, default off.
+    projects: the person's own project rules, a list of
+    {"name": "...", "match": ["substring or glob", ...]}; see projects.py.
+    session_projects: {session id or a prefix of 8 or more characters: project
+    name}; wins over every project rule.
+    exclude: rules for work that is never shown anywhere, a list of
+    {"match": ["substring or glob", ...]} and or {"sessions": ["id", ...]}.
+    only_account: the short form (6 or more hex characters) of the one Claude
+    account to show, or None. unknown_account: "include" (default) or "exclude",
+    for sessions with no account evidence. exclude_dates: [(first, last)] days
+    dropped whole, either end None for open. other_project: the name under which
+    sessions with no folder and no matching rule are filed, or None.
+    evidence_on_page: show short session excerpts under each item on the page.
+    When the key is absent it is on for a local-only page and off once the page
+    is published (page_url set). evidence_on_page_set says whether the person
+    chose it themselves. A file that cannot be read turns it off.
     """
-    cfg = {"page_url": None, "notify": False, "projects": []}
+    cfg = {"page_url": None, "notify": False, "projects": [], "session_projects": {},
+           "exclude": [], "evidence_on_page": True, "evidence_on_page_set": False,
+           "only_account": None, "unknown_account": "include", "exclude_dates": [],
+           "other_project": None, "damaged": False}
     try:
         with open(config_file()) as fh:
             raw = json.load(fh)
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return cfg
-    if isinstance(raw, dict):
-        if valid_page_url(raw.get("page_url")):
-            cfg["page_url"] = raw["page_url"]
-        cfg["notify"] = raw.get("notify") is True
-        for rule in raw.get("projects") if isinstance(raw.get("projects"), list) else []:
-            if (isinstance(rule, dict) and isinstance(rule.get("name"), str) and rule["name"].strip()
-                    and isinstance(rule.get("match"), list)):
-                match = [m for m in rule["match"] if isinstance(m, str) and m.strip()]
-                if match:
-                    cfg["projects"].append({"name": rule["name"].strip()[:80], "match": match})
+    except (OSError, ValueError):
+        raw = None
+    if not isinstance(raw, dict):
+        # The file may hold rules for what must never be shown, and they cannot be
+        # read. Callers that show data (scope.Scope) refuse to run on "damaged".
+        cfg["evidence_on_page"] = False
+        cfg["damaged"] = True
+        return cfg
+    if valid_page_url(raw.get("page_url")):
+        cfg["page_url"] = raw["page_url"]
+    cfg["notify"] = raw.get("notify") is True
+    for rule in raw.get("projects") if isinstance(raw.get("projects"), list) else []:
+        if (isinstance(rule, dict) and isinstance(rule.get("name"), str) and rule["name"].strip()
+                and isinstance(rule.get("match"), list)):
+            match = [m for m in rule["match"] if isinstance(m, str) and m.strip()]
+            if match:
+                cfg["projects"].append({"name": rule["name"].strip()[:80], "match": match})
+    pins = raw.get("session_projects")
+    for key, name in (pins.items() if isinstance(pins, dict) else []):
+        if (isinstance(key, str) and len(key.strip()) >= 8 and isinstance(name, str)
+                and name.strip()):
+            cfg["session_projects"][key.strip().lower()] = name.strip()[:80]
+    # A "leave this out" key that is there but cannot be used marks the file as
+    # damaged: guessing would show what the person asked to hide.
+    if "exclude" in raw:
+        cfg["exclude"], usable = _clean_exclude(raw["exclude"])
+        if not usable:
+            cfg["damaged"] = True
+    if "only_account" in raw:
+        only = raw["only_account"]
+        only = only.strip().lower().replace("-", "") if isinstance(only, str) else ""
+        if re.fullmatch(r"[0-9a-f]{6,64}", only):
+            cfg["only_account"] = only[:6]            # the short form only
+        else:
+            cfg["damaged"] = True
+    if "unknown_account" in raw:
+        if raw["unknown_account"] in ("include", "exclude"):
+            cfg["unknown_account"] = raw["unknown_account"]
+        else:
+            cfg["damaged"] = True
+    if "exclude_dates" in raw:
+        dates = raw["exclude_dates"]
+        dates = [dates] if isinstance(dates, str) else dates
+        if not isinstance(dates, list):
+            cfg["damaged"] = True
+            dates = []
+        for text in dates:
+            rng = parse_date_range(text)
+            if rng:
+                cfg["exclude_dates"].append(rng)
+            else:
+                cfg["damaged"] = True
+    other = raw.get("other_project")
+    if isinstance(other, str) and other.strip():
+        cfg["other_project"] = " ".join(other.replace("|", "/").split())[:60]
+    if isinstance(raw.get("evidence_on_page"), bool):
+        cfg["evidence_on_page"] = raw["evidence_on_page"]
+        cfg["evidence_on_page_set"] = True
+    elif "evidence_on_page" in raw:
+        cfg["evidence_on_page"] = False          # an unreadable value never turns excerpts on
+        cfg["evidence_on_page_set"] = True
+    else:
+        cfg["evidence_on_page"] = cfg["page_url"] is None
     return cfg
 
 
