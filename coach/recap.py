@@ -29,6 +29,8 @@ if HERE not in sys.path:
 
 import common as C  # noqa: E402
 import extract  # noqa: E402
+import ledger as L  # noqa: E402
+import pricing as P  # noqa: E402
 import signals  # noqa: E402
 
 PLUGIN_ROOT = os.path.dirname(HERE)
@@ -99,6 +101,45 @@ def _old_sessions(path):
         return 0
 
 
+def cost_plan(mode, first, end, digest, projects_dir=None):
+    """Add the covered days to the ledger and return the cost lines the report carries."""
+    last = (end - datetime.timedelta(days=1)).isoformat()
+    try:
+        led, result = L.update(first.isoformat(), last, projects_dir)
+    except (L.LedgerError, OSError) as e:
+        # the recap still runs; the lines then carry the range only, without all-time figures
+        led, result = L._clean(None), {"error": str(e)}
+        L.upsert(led, L.scan(projects_dir, min(first.isoformat(), L.monday(last)), last))
+        led["first_day"] = None
+    since = led.get("first_day")
+    alltime = L.totals(led, since, None) if since else None
+    span = L.totals(led, first.isoformat(), last)
+    week_to_date = L.totals(led, L.monday(last), last)
+    dc = (digest.get("totals") or {}).get("cost") or {}
+    cost = {"usd": dc.get("usd", 0), "text": dc.get("text") or P.fmt_usd(0),
+            "meaning": "API-equivalent at list prices, not a bill",
+            "prices_date": P.prices_date(), "unpriced_tokens": dc.get("unpriced_tokens", 0),
+            "all_time_usd": round(alltime["usd"], 2) if alltime else None,
+            "all_time_text": P.fmt_usd(alltime["usd"]) if alltime else None,
+            "since": since}
+    projects = digest.get("projects") or []
+    if projects:
+        cost["top_project"] = {"name": projects[0]["name"], "usd": projects[0]["usd"],
+                               "text": projects[0]["text"]}
+    out = {"cost": cost, "ledger": L.ledger_file(),
+           "ledger_seeded_now": bool(result.get("seeded"))}
+    if result.get("error"):
+        out["ledger_error"] = result["error"]
+    if mode == "weekly":
+        out["cost_block"] = L.cost_block(span, alltime, since)
+    else:
+        cost["week_to_date_usd"] = round(week_to_date["usd"], 2)
+        cost["week_to_date_text"] = P.fmt_usd(week_to_date["usd"])
+        per = {"day": span, "calweek": week_to_date, "all": alltime, "since": since}
+        out["totals_line"] = L.totals_line(per, "day" if mode == "daily" else "range")
+    return out
+
+
 def build(words, today=None, projects_dir=None, root=None):
     mode, first, end, label = plan(words, today)
     root = root or C.reports_dir()
@@ -153,6 +194,14 @@ def build(words, today=None, projects_dir=None, root=None):
             out["report"] = os.path.join(folders["ranges"], label + ".md")
             out["title"] = "# Coach: %s to %s" % (out["first_day"], out["last_day"])
         out["last_three_daily_reports"] = _earlier(folders["daily"], out["first_day"], 3)
+    out.update(cost_plan(mode, first, end, digest, projects_dir))
+    cfg = C.load_config()
+    out["page_file"] = C.site_file()
+    out["page_build"] = [os.path.join(HERE, "build_site.py")] + (["--card"] if mode == "daily" else [])
+    out["page_url"] = cfg["page_url"]                       # None: do not publish
+    # notify for the runs a schedule makes (yesterday, the week), not for a look back
+    fresh = mode == "weekly" or (mode == "daily" and end == (today or datetime.date.today()))
+    out["notify"] = bool(cfg["notify"]) and fresh
     t = digest.get("totals") or {}
     out["sessions"] = t.get("sessions", 0)
     out["turns"] = t.get("turns", 0)

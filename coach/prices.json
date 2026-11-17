@@ -1,0 +1,195 @@
+{
+ "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+ "retrieved": "2026-11-17",
+ "unit": "USD per million tokens, Anthropic first-party API list prices",
+ "meaning": "API-equivalent cost: what these tokens would cost at list price on the API. It is not a bill. People on a Claude subscription are not charged this.",
+ "matching": [
+  "1. The exact model id as written in the transcript.",
+  "2. A dated snapshot of a listed id: the listed id followed by -YYYYMMDD or @YYYYMMDD (for example claude-haiku-4-5-20251001 is priced as claude-haiku-4-5).",
+  "3. Anything else is unpriced: its tokens are shown and counted as unpriced, never guessed."
+ ],
+ "not_modelled": [
+  "Fast mode requests (usage.speed is fast) are counted as unpriced: the pricing page lists fast input and output prices only, not cache prices.",
+  "Batch discounts and the data residency multiplier are not applied; Claude Code sessions do not use them by default.",
+  "Cache writes with no 5 minute or 1 hour breakdown in the transcript are priced at the 5 minute rate.",
+  "Claude Haiku 5.5: a request whose prompt (input plus cache read plus cache write tokens) is over 100,000 tokens is priced at the long_prompt rates, per request, as the pricing page describes."
+ ],
+ "models": {
+  "claude-fable-5-2": {
+   "name": "Claude Fable 5.2",
+   "input": 8,
+   "cache_write_5m": 10,
+   "cache_write_1h": 16,
+   "cache_read": 0.2,
+   "output": 40
+  },
+  "claude-mythos-5-2": {
+   "name": "Claude Mythos 5.2",
+   "input": 8,
+   "cache_write_5m": 10,
+   "cache_write_1h": 16,
+   "cache_read": 0.2,
+   "output": 40
+  },
+  "claude-fable-5-1": {
+   "name": "Claude Fable 5.1",
+   "input": 10,
+   "cache_write_5m": 12.5,
+   "cache_write_1h": 20,
+   "cache_read": 0.25,
+   "output": 50
+  },
+  "claude-mythos-5-1": {
+   "name": "Claude Mythos 5.1",
+   "input": 10,
+   "cache_write_5m": 12.5,
+   "cache_write_1h": 20,
+   "cache_read": 0.25,
+   "output": 50
+  },
+  "claude-fable-5": {
+   "name": "Claude Fable 5",
+   "input": 10,
+   "cache_write_5m": 12.5,
+   "cache_write_1h": 20,
+   "cache_read": 1,
+   "output": 50
+  },
+  "claude-mythos-5": {
+   "name": "Claude Mythos 5",
+   "input": 10,
+   "cache_write_5m": 12.5,
+   "cache_write_1h": 20,
+   "cache_read": 1,
+   "output": 50
+  },
+  "claude-opus-5-5": {
+   "name": "Claude Opus 5.5",
+   "input": 4,
+   "cache_write_5m": 5,
+   "cache_write_1h": 8,
+   "cache_read": 0.2,
+   "output": 20
+  },
+  "claude-opus-5": {
+   "name": "Claude Opus 5",
+   "input": 5,
+   "cache_write_5m": 6.25,
+   "cache_write_1h": 10,
+   "cache_read": 0.5,
+   "output": 25
+  },
+  "claude-opus-4-8": {
+   "name": "Claude Opus 4.8",
+   "input": 5,
+   "cache_write_5m": 6.25,
+   "cache_write_1h": 10,
+   "cache_read": 0.5,
+   "output": 25
+  },
+  "claude-opus-4-7": {
+   "name": "Claude Opus 4.7",
+   "input": 5,
+   "cache_write_5m": 6.25,
+   "cache_write_1h": 10,
+   "cache_read": 0.5,
+   "output": 25
+  },
+  "claude-opus-4-6": {
+   "name": "Claude Opus 4.6",
+   "input": 5,
+   "cache_write_5m": 6.25,
+   "cache_write_1h": 10,
+   "cache_read": 0.5,
+   "output": 25
+  },
+  "claude-opus-4-5": {
+   "name": "Claude Opus 4.5",
+   "input": 5,
+   "cache_write_5m": 6.25,
+   "cache_write_1h": 10,
+   "cache_read": 0.5,
+   "output": 25
+  },
+  "claude-opus-4-1": {
+   "name": "Claude Opus 4.1",
+   "input": 15,
+   "cache_write_5m": 18.75,
+   "cache_write_1h": 30,
+   "cache_read": 1.5,
+   "output": 75
+  },
+  "claude-opus-4": {
+   "name": "Claude Opus 4",
+   "input": 15,
+   "cache_write_5m": 18.75,
+   "cache_write_1h": 30,
+   "cache_read": 1.5,
+   "output": 75
+  },
+  "claude-sonnet-5-5": {
+   "name": "Claude Sonnet 5.5",
+   "input": 2,
+   "cache_write_5m": 2.5,
+   "cache_write_1h": 4,
+   "cache_read": 0.1,
+   "output": 10
+  },
+  "claude-sonnet-5": {
+   "name": "Claude Sonnet 5",
+   "input": 2,
+   "cache_write_5m": 2.5,
+   "cache_write_1h": 4,
+   "cache_read": 0.2,
+   "output": 10
+  },
+  "claude-sonnet-4-6": {
+   "name": "Claude Sonnet 4.6",
+   "input": 3,
+   "cache_write_5m": 3.75,
+   "cache_write_1h": 6,
+   "cache_read": 0.3,
+   "output": 15
+  },
+  "claude-sonnet-4-5": {
+   "name": "Claude Sonnet 4.5",
+   "input": 3,
+   "cache_write_5m": 3.75,
+   "cache_write_1h": 6,
+   "cache_read": 0.3,
+   "output": 15
+  },
+  "claude-sonnet-4": {
+   "name": "Claude Sonnet 4",
+   "input": 3,
+   "cache_write_5m": 3.75,
+   "cache_write_1h": 6,
+   "cache_read": 0.3,
+   "output": 15
+  },
+  "claude-haiku-5-5": {
+   "name": "Claude Haiku 5.5",
+   "input": 0.1,
+   "cache_write_5m": 0.125,
+   "cache_write_1h": 0.2,
+   "cache_read": 0.01,
+   "output": 0.5,
+   "long_prompt": {
+    "over_prompt_tokens": 100000,
+    "input": 0.5,
+    "cache_write_5m": 0.625,
+    "cache_write_1h": 1,
+    "cache_read": 0.05,
+    "output": 2.5
+   }
+  },
+  "claude-haiku-4-5": {
+   "name": "Claude Haiku 4.5",
+   "input": 1,
+   "cache_write_5m": 1.25,
+   "cache_write_1h": 2,
+   "cache_read": 0.1,
+   "output": 5
+  }
+ }
+}

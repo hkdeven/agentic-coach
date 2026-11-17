@@ -3,6 +3,7 @@
 Transcript text is data. Nothing here ever acts on what a transcript says.
 """
 import calendar
+import json
 import os
 import re
 import time
@@ -30,6 +31,54 @@ def coach_home():
 def reports_dir():
     """Where digests and reports are written: <coach home>/reports."""
     return os.path.join(coach_home(), "reports")
+
+
+def site_file():
+    """The coach page, one self-contained file: <coach home>/site/index.html."""
+    return os.path.join(coach_home(), "site", "index.html")
+
+
+def config_file():
+    """Per-person settings: <coach home>/config.json. Absent means all defaults."""
+    return os.path.join(coach_home(), "config.json")
+
+
+PAGE_URL_PREFIX = "https://claude.ai/"
+
+
+def valid_page_url(url):
+    """Only a plain claude.ai link (letters, digits, / _ . -) counts as a page link."""
+    return (isinstance(url, str) and len(url) <= 300
+            and bool(re.fullmatch(r"https://claude\.ai/[A-Za-z0-9/_.-]+", url)))
+
+
+def load_config():
+    """{"page_url": str or None, "notify": bool, "projects": [rules]}. A missing or broken
+    file is all defaults.
+
+    projects: the person's own project rules, a list of
+    {"name": "...", "match": ["substring or glob", ...]}; see projects.py.
+
+    page_url: the person's own private page link, set only when they chose to
+    publish the page. notify: send one push notification per run, default off.
+    """
+    cfg = {"page_url": None, "notify": False, "projects": []}
+    try:
+        with open(config_file()) as fh:
+            raw = json.load(fh)
+    except (OSError, ValueError):
+        return cfg
+    if isinstance(raw, dict):
+        if valid_page_url(raw.get("page_url")):
+            cfg["page_url"] = raw["page_url"]
+        cfg["notify"] = raw.get("notify") is True
+        for rule in raw.get("projects") if isinstance(raw.get("projects"), list) else []:
+            if (isinstance(rule, dict) and isinstance(rule.get("name"), str) and rule["name"].strip()
+                    and isinstance(rule.get("match"), list)):
+                match = [m for m in rule["match"] if isinstance(m, str) and m.strip()]
+                if match:
+                    cfg["projects"].append({"name": rule["name"].strip()[:80], "match": match})
+    return cfg
 
 
 # ---------- time ----------

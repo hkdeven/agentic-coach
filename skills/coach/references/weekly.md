@@ -4,7 +4,7 @@ Used by the `coach` skill for `week`. The ground rules in `SKILL.md` apply in fu
 
 You are reviewing how the user worked with Claude Code over the last 7 days and proposing concrete changes that would make next week cheaper and faster. You propose. You do not apply. Applying waits for the user's yes.
 
-Read only, with one exception: you write the report file named in the plan. Do not edit `~/.claude/settings.json`, any CLAUDE.md, any skill, hook, plugin or repo. Do not create scheduled tasks. Five observations and five proposals are ceilings, not targets. If the week was clean, say so in one line and stop.
+Read only, apart from the report file named in the plan and the page steps below (rebuild, and publish or notify only when the plan says so). Do not edit `~/.claude/settings.json`, any CLAUDE.md, any skill, hook, plugin or repo. Do not create scheduled tasks. Five observations and five proposals are ceilings, not targets. If the week was clean, the report is one line that says so; still write it and still rebuild the page.
 
 ## Steps
 
@@ -25,6 +25,10 @@ Read only, with one exception: you write the report file named in the plan. Do n
    One or two lines: sessions, prompts, active hours, output tokens, errors, corrections,
    compactions, each with last week's figure beside it when known.
 
+   ## Cost by project
+   (the plan's `cost_block`, copied exactly: a table of project, week tokens, week cost
+   and all-time cost, a Total row, and one note line)
+
    ## What cost the most
    1. What happened: one line with sessions, dates and the number.
       Do instead: one line.
@@ -39,6 +43,10 @@ Read only, with one exception: you write the report file named in the plan. Do n
    (at most five, highest value first)
    ```
 
+   The plan's `cost_block` already starts with its own `## Cost by project` heading: paste it once, as it is, between "Week in numbers" and "What cost the most". In "Week in numbers" give the week's cost beside the tokens (from `totals.cost` in the digest), and in every item that quotes tokens quote the cost in the same line, for example `3.0M output tokens, about $45`.
+
+   The coach page (`coach/build_site.py`) parses this file, so keep the four `##` headings, the `### P1: name` form and the labels `What happened:`, `Do instead:`, `Trend:`, `Why:`, `Change:`, `Where:` exactly as written, each at the start of its line with no bold around it. Start every `Trend:` line with one of the four words new, repeat, better, worse. Put the text to paste for `Change:` in a fenced code block on the lines right after it (one sentence on what it does may follow `Change:` on the same line), so the page can offer it for copying.
+
    Write every proposal out in full so that a yes is all it needs:
    - CLAUDE.md rule: the exact line, and which file (`~/.claude/CLAUDE.md` or a project's).
    - Hook: the exact JSON block for `settings.json`, with event, matcher and command, and one line on what it does. Check the schema against https://code.claude.com/docs/en/hooks before you write it.
@@ -49,6 +57,10 @@ Read only, with one exception: you write the report file named in the plan. Do n
 
    Do not propose anything that needs a push, a deploy, or a change to another team's code.
 
-6. Reply with the "What cost the most" lines, then the list of proposals as `P1: name` with one line each, then the single question: `Apply which? (for example: P1 P3, all, none)`. Nothing else. If the week was clean, reply with one line that says so.
+6. Rebuild the coach page as "After the report" in `SKILL.md` says, with the `page_build` arguments from the plan. Then, only if the plan's `page_url` is set, publish it to that existing link exactly as that section says: Artifact `read` of the url first, then publish `page_file` with the same `url`, never without the `url`, no `icon`, no `title`. If publishing fails, say so in your reply and carry on. These actions and the notification in step 7 are allowed in addition to writing the report.
 
-7. Stop there. If the user later answers with a yes for specific proposals, apply only those, show each change as it lands, and leave the rest untouched.
+7. If the plan's `notify` is true, send one push notification. One line under 200 characters, no markdown: `Coach weekly review ready: N proposals waiting for your yes.` If the week was clean, send nothing. If `notify` is false, skip this step.
+
+8. Reply with the page link on its own line (only if `page_url` is set), then one line with the week's cost and the top three projects by cost, then the "What cost the most" lines, then the list of proposals as `P1: name` with one line each, then the single question: `Apply which? (for example: P1 P3, all, none)`. Nothing else. If the week was clean, reply with one line that says so.
+
+9. Stop there. If the user later answers with a yes for specific proposals, apply only those, show each change as it lands, and leave the rest untouched.
