@@ -1,7 +1,7 @@
 {
   "name": "agentic-coach",
   "description": "Coaches you on your own Claude Code usage: reads your session transcripts on your machine, shows where time and tokens went and which feature would have helped, as a daily recap, a weekly review with proposed changes, and a one-line nudge at the end of a costly turn. It runs on your machine, and nothing is sent anywhere unless you choose to publish your own coach page.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": {
     "name": "Deven Blackburn"
   },
