@@ -256,7 +256,7 @@ class SiteTest(unittest.TestCase):
         self.assertEqual(total("corrections"), 1)
         self.assertEqual(total("sessions"), 1)
         self.assertIn("<svg", page)
-        self.assertIn("300k line", page)
+        self.assertIn("600k line", page)
         self.assertIn("Too few days to compare yet", page)
         before = os.stat(path).st_mtime_ns
         page2, _ = self.run_build()

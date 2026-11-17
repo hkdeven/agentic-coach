@@ -41,7 +41,7 @@ except ImportError:  # run as a script
 TREND_DAYS = 30
 MAX_DAILIES = 60
 MAX_WEEKLIES = 26
-CONTEXT_LINE = 300000
+CONTEXT_LINE = 600000
 DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.md$")
 SID_RE = re.compile(r"\b[0-9a-f]{8}\b")
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
