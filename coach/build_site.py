@@ -18,6 +18,7 @@ import argparse
 import bisect
 import glob
 import html
+import importlib
 import json
 import math
 import os
@@ -31,13 +32,38 @@ try:
     from . import extract as E
     from . import ledger as L
     from . import pricing as P
+    from . import projects as PR
+    from . import scope as SC
 except ImportError:  # run as a script
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import common as C
     import extract as E
     import ledger as L
     import pricing as P
+    import projects as PR
+    import scope as SC
 
+
+def optional(name):
+    """One of the coach modules the page shows data from, or None when it cannot
+    be loaded. The page is built without it then; it never fails to build."""
+    try:
+        if __package__:
+            return importlib.import_module("." + name, __package__)
+        return importlib.import_module(name)
+    except Exception:
+        return None
+
+
+def guarded(fn, *args, **kwargs):
+    """fn(...) or None. A failure in one module leaves the rest of the page intact."""
+    try:
+        return fn(*args, **kwargs)
+    except Exception:
+        return None
+
+
+EVIDENCE_DAILIES = 7      # newest dailies whose items carry their evidence
 TREND_DAYS = 30
 MAX_DAILIES = 60
 MAX_WEEKLIES = 26
@@ -120,6 +146,131 @@ def json_for_script(obj):
     s = re.sub(r"\\(.)", lambda m: "\\u0022" if m.group(1) == '"' else m.group(0), s)
     return (s.replace("<", "\\u003c").replace(">", "\\u003e")
             .replace("&", "\\u0026").replace("'", "\\u0027"))
+
+
+# ---------- work that is never shown ----------
+
+class Hide(object):
+    """The person's exclude rules, as the page applies them.
+
+    rules: the "exclude" list from config.json. ids: first 8 characters of the
+    sessions the ledger found to be excluded. With neither, nothing is hidden
+    and every check is False.
+    """
+
+    def __init__(self, rules=None, ids=(), scope=None):
+        self.rules = [r for r in rules or [] if isinstance(r, dict)]
+        self.ids = set(str(i)[:8].lower() for i in ids or () if i)
+        self.on = bool(self.rules or self.ids)
+        # the account and date settings work on transcripts and the ledger, not on text
+        self.scope = scope if scope is not None else SC.Scope(cfg={}, exclude=self.rules)
+
+    def plus(self, ids):
+        return Hide(self.rules, self.ids | set(ids), self.scope) if ids else self
+
+    def text(self, *texts):
+        """True when any of the texts names excluded work."""
+        if not self.on:
+            return False
+        return any(PR.text_hidden(self.rules, t, self.ids)
+                   for t in texts if isinstance(t, str) and t)
+
+    def deep(self, obj):
+        """text() over every string inside a dict or list, keys included."""
+        if not self.on:
+            return False
+        if isinstance(obj, str):
+            return self.text(obj)
+        if isinstance(obj, dict):
+            return any(self.deep(k) or self.deep(v) for k, v in obj.items())
+        if isinstance(obj, (list, tuple)):
+            return any(self.deep(v) for v in obj)
+        return False
+
+    def session(self, sid, texts=()):
+        """True for a session the rules cover, by id or by a text it carries."""
+        if not self.on:
+            return False
+        sid = str(sid or "").lower()
+        if sid and sid[:8] in self.ids:
+            return True
+        return PR.excluded(self.rules, sid, [t for t in texts if isinstance(t, str) and t])
+
+
+NO_HIDE = Hide()
+
+
+def load_hide(ledger_path=None):
+    """The exclude rules from config.json plus the ledger's list of excluded sessions."""
+    cfg = guarded(C.load_config) or {}
+    rules = cfg.get("exclude") or []
+    got = guarded(L.load, ledger_path)
+    led = got[0] if isinstance(got, tuple) and isinstance(got[0], dict) else {}
+    ids = led.get("excluded")
+    return Hide(rules, ids if isinstance(ids, list) else (), SC.Scope(cfg))
+
+
+def visible_md(text, hide):
+    """A markdown text without the lines and bullets that name excluded work.
+
+    A hidden bullet goes with the lines nested under it. If what is left still
+    names excluded work (a match that runs across lines), nothing is shown.
+    """
+    if not text or not hide.text(text):
+        return text
+    out = []
+    skip = None
+    for line in text.split("\n"):
+        indent = len(line) - len(line.lstrip())
+        if skip is not None:
+            if not line.strip():
+                out.append(line)
+                continue
+            if indent > skip:
+                continue
+            skip = None
+        if hide.text(line):
+            if _LIST_RE.match(line):
+                skip = indent
+            continue
+        out.append(line)
+    text = "\n".join(out)
+    return "" if hide.text(text) else text
+
+
+_USD_CLAUSE_RE = re.compile(r"^.+ \$\d[\d,]*(?:\.\d+)?$")
+
+
+def visible_totals(text, hide):
+    """A `Totals:` line without the clause of an excluded project.
+
+    Only a clause of the `Top projects:` list can be cut cleanly. A hidden name
+    anywhere else leaves the whole line out.
+    """
+    if not hide.text(text):
+        return text
+    out = []
+    for sent in re.split(r"(?<=\.)\s+(?=[A-Z])", text):
+        if not hide.text(sent):
+            out.append(sent)
+            continue
+        m = re.match(r"^(Top projects:)\s*(.*?)\.?$", sent)
+        clauses = m.group(2).split(", ") if m else []
+        if not clauses or not all(_USD_CLAUSE_RE.match(c) for c in clauses):
+            return ""
+        keep = [c for c in clauses if not hide.text(c)]
+        if keep:
+            out.append("%s %s." % (m.group(1), ", ".join(keep)))
+    text = " ".join(out)
+    return "" if hide.text(text) else text
+
+
+def visible_sentences(text, hide):
+    """A line of prose without the sentences that name excluded work."""
+    if not hide.text(text):
+        return text
+    text = " ".join(x for x in re.split(r"(?<=[.;])\s+", text) if not hide.text(x))
+    return "" if hide.text(text) else text
 
 
 # ---------- markdown subset to HTML ----------
@@ -317,9 +468,37 @@ def md_title(text, fallback):
 # ---------- report parsing ----------
 
 _ITEM_RE = re.compile(r"^\s*(\d+)[.)]\s+(?:What happened:\s*)?(.*)$")
-_FIELD_RE = re.compile(r"^\s*(?:[-*]\s+)?(Do instead|Trend):\s*(.*)$")
+_FIELD_RE = re.compile(r"^\s*(?:[-*]\s+)?(Do instead|Trend|Evidence):\s*(.*)$")
+_FIELD_KEYS = {"Do instead": "do", "Trend": "trend", "Evidence": "evidence_cmd"}
 _REPEAT_RE = re.compile(r"\(repeat\b|\brepeat of\b|\ba repeat\b|\brepeat from\b|^\W*repeat\b", re.I)
 _TREND_RE = re.compile(r"\b(new|repeat(?:ing|ed|s)?|better|worse)\b", re.I)
+_TAG_PAREN_RE = re.compile(r"\((session [0-9a-f]{8}\b[^()]*)\)")
+
+FT = optional("followthrough")
+EV = optional("evidence")
+# The repeat marker: "(repeat of DATE)" or "(repeat of DATE, given N times)", and
+# on a weekly Trend line "repeat since DATE, given N times".
+_MARKER_RE = getattr(FT, "MARKER_RE", None) or re.compile(
+    r"\(repeat of (\d{4}-\d{2}-\d{2})(?:, given (\d+) times)?\)")
+_TREND_MARKER_RE = getattr(FT, "TREND_MARKER_RE", None) or re.compile(
+    r"\brepeat since (\d{4}-\d{2}-\d{2})(?:, given (\d+) times)?")
+
+
+def find_tag(text):
+    """The evidence tag of an item, the text inside its round brackets, or None."""
+    for m in _TAG_PAREN_RE.finditer(text or ""):
+        tag = m.group(1).strip()
+        if EV is None or guarded(lambda: EV.parse_tag(tag)):
+            return tag
+    return None
+
+
+def find_marker(what, trend=""):
+    """(first date, times given or None) from an item's repeat marker, or (None, None)."""
+    m = _MARKER_RE.search(what or "") or _TREND_MARKER_RE.search(trend or "")
+    if not m:
+        return None, None
+    return m.group(1), int(m.group(2)) if m.group(2) else None
 
 
 def find_ids(text):
@@ -339,7 +518,8 @@ def trend_state(text):
 
 
 def parse_items(lines):
-    """Numbered items with What happened, Do instead and optional Trend lines."""
+    """Numbered items with What happened, Do instead and optional Trend and
+    Evidence lines. Each item also gets its evidence tag and repeat marker."""
     items = []
     notes = []
     cur = None
@@ -350,12 +530,13 @@ def parse_items(lines):
             continue
         m = _FIELD_RE.match(line)
         if m and cur is not None:
-            field = "do" if m.group(1) == "Do instead" else "trend"
+            field = _FIELD_KEYS[m.group(1)]
             cur[field] = (cur[field] + " " + m.group(2)).strip()
             continue
         m = _ITEM_RE.match(line)
         if m:
-            cur = {"n": int(m.group(1)), "what": m.group(2).strip(), "do": "", "trend": ""}
+            cur = {"n": int(m.group(1)), "what": m.group(2).strip(), "do": "", "trend": "",
+                   "evidence_cmd": ""}
             items.append(cur)
             field = "what"
             continue
@@ -365,6 +546,9 @@ def parse_items(lines):
             notes.append(line.strip())
     for it in items:
         it["ids"] = find_ids(it["what"] + " " + it["do"])[:6]
+        it["tag"] = find_tag(it["what"])
+        it["repeat_since"], it["times"] = find_marker(it["what"], it["trend"])
+        it["evidence_cmd"] = cut(it["evidence_cmd"], 300) or None
         it["repeat"] = bool(_REPEAT_RE.search(it["what"]) or _REPEAT_RE.search(it["do"]))
         it["state"] = trend_state(it["trend"]) if it["trend"] else ""
         for k in ("what", "do", "trend"):
@@ -375,10 +559,39 @@ def parse_items(lines):
 
 
 _TOTALS_RE = re.compile(r"^\s*(?:[-*]\s+)?Totals:\s*(.*)$")
+_CHECKED_RE = re.compile(r"^\s*(?:[-*]\s+)?Checked:\s*(.*)$")
 
 
-def parse_daily(text):
-    """Items, the note, and the closing `Totals:` line (tokens and cost for the day)."""
+def take_checked(lines):
+    """(the other lines, the text of the `Checked:` line or "")."""
+    rest, checked = [], ""
+    for line in lines:
+        m = _CHECKED_RE.match(line.replace("**", ""))
+        if m:
+            checked = m.group(1).strip()
+        else:
+            rest.append(line)
+    return rest, cut(checked, 300)
+
+
+def renumber(items, kept):
+    """kept, numbered from 1 again when something was taken out of items."""
+    if len(kept) != len(items):
+        for i, it in enumerate(kept):
+            it["n"] = i + 1
+    return kept
+
+
+def visible_items(items, hide):
+    if not hide.on:
+        return items
+    return renumber(items, [it for it in items if not hide.text(
+        it["what"], it["do"], it["trend"], it.get("evidence_cmd"))])
+
+
+def parse_daily(text, hide=NO_HIDE):
+    """Items, the note, the closing `Totals:` line (tokens and cost for the day)
+    and the `Checked:` line that may follow it. Excluded work is left out."""
     lines, totals = [], ""
     for line in (text or "").split("\n"):
         m = _TOTALS_RE.match(line.replace("**", ""))
@@ -386,8 +599,16 @@ def parse_daily(text):
             totals = m.group(1).strip()
         else:
             lines.append(line)
+    lines, checked = take_checked(lines)
     items, note = parse_items(lines)
-    return {"items": items[:5], "note": cut(note, 400), "totals": cut(totals, 500)}
+    if hide.on and hide.text(text or ""):
+        # A report that names excluded work was written with that work in its
+        # totals. A total it is part of is not shown, with or without the name.
+        totals = ""
+    return {"items": visible_items(items, hide)[:5],
+            "note": "" if hide.text(note) else cut(note, 400),
+            "totals": cut(visible_totals(totals, hide), 500),
+            "checked": "" if hide.text(checked) else checked}
 
 
 _SECTION_RE = re.compile(r"^##\s+(.*)$")
@@ -424,7 +645,55 @@ def _is_fence(line):
     return s.startswith("```") and "```" not in s[3:]
 
 
-_KNOWN_SECTION_RE = re.compile(r"^##\s+(week in numbers|what cost|proposed|cost by project)", re.I)
+_KNOWN_SECTION_RE = re.compile(
+    r"^##\s+(follow-through|week in numbers|cost by project|before and after|what cost"
+    r"|set up but unused|proposed)", re.I)
+FT_STATUSES = ("worse", "recurred", "same", "better", "not seen again", "cannot measure", "no data")
+_FT_RE = re.compile(r"^(%s)(?:,\s*applied on (\d{4}-\d{2}-\d{2}))?\s*:\s*(.*)$"
+                    % "|".join(FT_STATUSES), re.I | re.S)
+_BULLET_RE = re.compile(r"^\s*[-*]\s+(.*)$")
+
+
+def bullet_lines(lines):
+    """(bullets, other lines): each bullet with the indented lines under it joined on."""
+    bullets, rest = [], []
+    for raw in lines:
+        line = raw.replace("**", "")
+        if not line.strip():
+            continue
+        m = _BULLET_RE.match(line)
+        if m:
+            bullets.append(m.group(1).strip())
+        elif bullets and line[:1] in (" ", "\t"):
+            bullets[-1] += " " + line.strip()
+        else:
+            rest.append(line.strip())
+    return bullets, rest
+
+
+def parse_followthrough(lines):
+    """`## Follow-through` bullets to {status, applied, text}. The status is one of FT_STATUSES."""
+    out = []
+    for text in bullet_lines(lines)[0][:8]:
+        m = _FT_RE.match(text)
+        if m:
+            out.append({"status": m.group(1).lower(), "applied": m.group(2),
+                        "text": cut(m.group(3), 500)})
+        else:
+            out.append({"status": "", "applied": None, "text": cut(text, 500)})
+    return out
+
+
+def parse_unused(lines):
+    """`## Set up but unused`: at most five lines, then the `Always on:` sentence."""
+    bullets, rest = bullet_lines(lines)
+    total = ""
+    for line in rest:
+        if line.lower().startswith("always on:"):
+            total = line
+        else:
+            bullets.append(line)
+    return {"lines": [cut(b, 400) for b in bullets[:5]], "total": cut(total, 400)}
 
 
 def parse_proposals(lines):
@@ -466,13 +735,15 @@ def parse_proposals(lines):
     return out
 
 
-def parse_weekly(text):
+def parse_weekly(text, hide=NO_HIDE):
     sections = {}
     name = ""
     in_fence = False
     for line in (text or "").split("\n"):
-        if _KNOWN_SECTION_RE.match(line):
-            in_fence = False                   # a report heading ends a fence left open
+        m = _KNOWN_SECTION_RE.match(line)
+        if m and not any(k.startswith(m.group(1).lower()) for k in sections):
+            in_fence = False                   # a report heading ends a fence left open,
+                                               # the first time it is met
         if _is_fence(line):
             in_fence = not in_fence
         elif not in_fence:
@@ -491,12 +762,29 @@ def parse_weekly(text):
                 return v
         return []
 
-    numbers = " ".join(x.strip() for x in pick("week in numbers") if x.strip())
-    items, _note = parse_items(pick("what cost"))
+    number_lines, checked = take_checked(pick("week in numbers"))
+    numbers = " ".join(x.strip() for x in number_lines if x.strip())
+    cost_lines, late = take_checked(pick("what cost"))
+    checked = checked or late
+    items, _note = parse_items(cost_lines)
     note = " ".join(x.strip() for x in sections.get("", []) if x.strip())
-    return {"numbers": cut(numbers, 900), "items": items[:5],
-            "proposals": parse_proposals(pick("proposed")), "note": cut(note, 400),
-            "cost": parse_cost_block(pick("cost by project"))}
+    compare_lines = [cut(re.sub(r"^\s*[-*]\s+", "", x.replace("**", "")).strip(), 400)
+                     for x in pick("before and after") if x.strip()][:6]
+    unused = parse_unused(pick("set up but unused"))
+    if hide.on and hide.text(text or ""):
+        numbers = ""       # written with excluded work in its figures: not shown
+    week = {"numbers": cut(visible_sentences(numbers, hide), 900),
+            "items": visible_items(items, hide)[:5],
+            "proposals": [p for p in parse_proposals(pick("proposed")) if not hide.deep(p)],
+            "note": "" if hide.text(note) else cut(note, 400),
+            "cost": parse_cost_block(pick("cost by project"), hide),
+            "checked": "" if hide.text(checked) else checked,
+            "followthrough": [f for f in parse_followthrough(pick("follow-through"))
+                              if not hide.text(f["text"])],
+            "compare_lines": [x for x in compare_lines if not hide.text(x)],
+            "unused": {"lines": [x for x in unused["lines"] if not hide.text(x)],
+                       "total": "" if hide.text(unused["total"]) else unused["total"]}}
+    return week
 
 
 # ---------- loading ----------
@@ -515,15 +803,120 @@ def dated_reports(folder):
     return out
 
 
+def _num(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _session_figures(full, s):
+    """What one digest session adds to the digest totals. None where it does not say."""
+    tok = s.get("tokens") if isinstance(s.get("tokens"), dict) else {}
+    sub = s.get("subagents") if isinstance(s.get("subagents"), dict) else {}
+    out = {"sessions": 1, "scheduled_sessions": 1 if s.get("kind") == "scheduled" else 0,
+           "turns": _num(s.get("turns"))}
+    if not full:                      # a small session: only prompts, output and cost
+        out.update(active_min=None, errors=None, corrections=None, compactions=None,
+                   out=None, sub_out=None, usd=_num(s.get("usd")))
+        return out
+    errors = s.get("errors") if isinstance(s.get("errors"), dict) else {}
+    comp = s.get("compactions") if isinstance(s.get("compactions"), list) else []
+    cost = s.get("cost") if isinstance(s.get("cost"), dict) else {}
+    sub_cost = sub.get("cost") if isinstance(sub.get("cost"), dict) else {}
+    usd = _num(cost.get("usd"))
+    out.update(active_min=_num(s.get("active_min")), errors=_num(errors.get("total")) or 0,
+               corrections=_num(s.get("corrections")) or 0,
+               compactions=_num(s.get("compactions_total")) or len(comp),
+               out=_num(tok.get("out")) or 0,
+               sub_out=_num((sub.get("tokens") or {}).get("out")
+                            if isinstance(sub.get("tokens"), dict) else 0) or 0,
+               usd=None if usd is None else usd + (_num(sub_cost.get("usd")) or 0))
+    return out
+
+
+def _totals_without(totals, dropped):
+    """Digest totals with the dropped sessions taken off again.
+
+    A figure stays only when every dropped session carries its own number for
+    it; otherwise it becomes None and the page prints nothing for it, never a
+    total that still has excluded work in it.
+    """
+    t = dict(totals) if isinstance(totals, dict) else {}
+    figs = [_session_figures(full, s) for full, s in dropped]
+
+    def less(have, key):
+        vals = [f[key] for f in figs]
+        if _num(have) is None or any(v is None for v in vals):
+            return None
+        return max(0, have - sum(vals))
+
+    for key in ("sessions", "scheduled_sessions", "turns", "active_min", "errors",
+                "corrections", "compactions"):
+        if key in t:
+            t[key] = less(t[key], key)
+    tok = t.get("tokens") if isinstance(t.get("tokens"), dict) else {}
+    sub = t.get("subagent_tokens") if isinstance(t.get("subagent_tokens"), dict) else {}
+    out = less(tok.get("out", 0), "out")
+    sub_out = less(sub.get("out", 0), "sub_out")
+    t["tokens"] = None if out is None or sub_out is None else dict(tok, out=out)
+    t["subagent_tokens"] = None if t["tokens"] is None else dict(sub, out=sub_out)
+    cost = t.get("cost") if isinstance(t.get("cost"), dict) else None
+    if cost is not None:
+        usd = less(cost.get("usd"), "usd")
+        t["cost"] = None if usd is None else dict(cost, usd=round(usd, 2))
+    return t
+
+
+def visible_digest(digest, hide):
+    """(the digest without excluded sessions and projects, ids of the sessions dropped).
+
+    A digest written before an exclude rule existed still holds that work. Its
+    totals are worked out again from what the dropped sessions say about themselves.
+    """
+    if not hide.on or not isinstance(digest, dict):
+        return digest, set()
+    out = dict(digest)
+    dropped = []
+    names = set()
+    for key in ("sessions", "minor_sessions"):
+        rows = digest.get(key)
+        if not isinstance(rows, list):
+            continue
+        keep = []
+        for s in rows:
+            if isinstance(s, dict) and hide.session(s.get("id"), [
+                    s.get(k) for k in ("project", "project_name", "title", "cwd",
+                                       "scheduled_task")]):
+                dropped.append((key == "sessions", s))
+                names.add(str(s.get("project_name") or ""))
+            else:
+                keep.append(s)
+        out[key] = keep
+    if isinstance(digest.get("projects"), list):
+        out["projects"] = [p for p in digest["projects"] if not (
+            isinstance(p, dict) and (hide.text(str(p.get("name") or ""))
+                                     or str(p.get("name") or "") in names))]
+    if dropped:
+        out["totals"] = _totals_without(digest.get("totals"), dropped)
+    return out, set(str(s.get("id") or "")[:8].lower() for _full, s in dropped) - set([""])
+
+
+def visible_findings(findings, hide):
+    """Detector findings without those of, or about, excluded sessions."""
+    if not hide.on or not isinstance(findings, list):
+        return findings
+    return [f for f in findings if not (isinstance(f, dict) and (
+        str(f.get("session") or "")[:8].lower() in hide.ids or hide.deep(f)))]
+
+
 def digest_counts(digest):
     t = (digest or {}).get("totals") or {}
     if not t:
         return {}
     tok = t.get("tokens") or {}
     sub = t.get("subagent_tokens") or {}
+    known = t.get("tokens", {}) is not None        # None: not known without excluded work
     return {"sessions": t.get("sessions", 0), "scheduled": t.get("scheduled_sessions", 0),
             "prompts": t.get("turns", 0), "active_min": t.get("active_min", 0),
-            "out_tokens": int(tok.get("out", 0)) + int(sub.get("out", 0)),
+            "out_tokens": int(tok.get("out", 0)) + int(sub.get("out", 0)) if known else None,
             "errors": t.get("errors", 0), "corrections": t.get("corrections", 0),
             "compactions": t.get("compactions", 0)}
 
@@ -584,45 +977,69 @@ def attach_evidence(entry, digest, findings):
     entry["counts"] = digest_counts(digest)
 
 
-def load_dailies(reports_dir):
+def read_digest(path, hide):
+    """(digest, exclude rules widened by the sessions dropped from it)."""
+    raw = read_json(path)
+    if (isinstance(raw, dict) and hide.scope.by_day
+            and (raw.get("scope_sig") or "") != hide.scope.day_sig()):
+        return None, hide          # counted under other account or date settings
+    try:
+        digest, gone = visible_digest(raw, hide)
+    except (AttributeError, TypeError, ValueError, KeyError, OverflowError):
+        if hide.on:
+            return None, hide          # cannot be checked, so it is not shown
+        return read_json(path), hide
+    return digest, hide.plus(gone)
+
+
+def load_dailies(reports_dir, hide=NO_HIDE):
     out = []
     digests = os.path.join(reports_dir, "digests")
     for day, path in dated_reports(os.path.join(reports_dir, "daily"))[:MAX_DAILIES]:
-        entry = parse_daily(read_text(path))
+        if hide.scope.date_hidden(day):
+            continue                      # a day the person left out is not shown at all
+        digest, seen = read_digest(os.path.join(digests, "daily-%s.json" % day), hide)
+        entry = parse_daily(read_text(path), seen)
         entry["date"] = day
         entry["label"] = long_date(day)
         entry["short"] = short_date(day)
         try:
-            entry["cost"] = digest_cost(read_json(os.path.join(digests, "daily-%s.json" % day)))
+            entry["cost"] = digest_cost(digest)
         except (AttributeError, TypeError, ValueError, KeyError, OverflowError):
             entry["cost"] = {}
         try:
-            attach_evidence(entry, read_json(os.path.join(digests, "daily-%s.json" % day)),
-                            read_json(os.path.join(digests, "daily-%s.findings.json" % day)))
+            attach_evidence(entry, digest, visible_findings(
+                read_json(os.path.join(digests, "daily-%s.findings.json" % day)), seen))
         except (AttributeError, TypeError, ValueError, KeyError, OverflowError):
             entry.update(sessions={}, findings={}, other=[], counts={})   # malformed digest
         out.append(entry)
     return out
 
 
-def load_weeklies(reports_dir):
+def load_weeklies(reports_dir, hide=NO_HIDE):
     out = []
     digests = os.path.join(reports_dir, "digests")
     for day, path in dated_reports(os.path.join(reports_dir, "weekly"))[:MAX_WEEKLIES]:
-        entry = parse_weekly(read_text(path))
+        raw = read_json(os.path.join(digests, "weekly-%s.json" % day))
+        stale = ((raw.get("scope_sig") or "") != hide.scope.day_sig()
+                 if isinstance(raw, dict) else True)
+        if stale and any(hide.scope.date_hidden(day_shift(day, -i)) for i in range(1, 8)):
+            continue        # a review of days the person has since left out is not shown
+        digest, seen = read_digest(os.path.join(digests, "weekly-%s.json" % day), hide)
+        entry = parse_weekly(read_text(path), seen)
         entry["date"] = day
         entry["label"] = "Week to " + long_date(day)
         try:
-            entry["counts"] = digest_counts(read_json(os.path.join(digests, "weekly-%s.json" % day)))
+            entry["counts"] = digest_counts(digest)
         except (AttributeError, TypeError, ValueError, KeyError, OverflowError):
             entry["counts"] = {}
         out.append(entry)
     return out
 
 
-def load_baseline(reports_dir):
+def load_baseline(reports_dir, hide=NO_HIDE):
     folder = os.path.join(reports_dir, "baseline")
-    summary = read_text(os.path.join(folder, "SUMMARY.md"))
+    summary = visible_md(read_text(os.path.join(folder, "SUMMARY.md")), hide)
     details = []
     newest = 0
     for path in sorted(glob.glob(os.path.join(folder, "*.md"))):
@@ -632,8 +1049,11 @@ def load_baseline(reports_dir):
             pass
         if os.path.basename(path) == "SUMMARY.md":
             continue
-        text = read_text(path) or ""
-        details.append((md_title(text, os.path.basename(path)), text))
+        text = visible_md(read_text(path) or "", hide)
+        title = md_title(text, os.path.basename(path))
+        if hide.text(title) or (hide.on and not text.strip()):
+            continue
+        details.append((title, text))
     return summary, details, newest
 
 
@@ -648,11 +1068,20 @@ def _day_edges(days):
     return los, his
 
 
-def _route_file(path, los, his, get_acc, seen=None):
-    """Like extract.scan_file, but feeds each record to the accumulator of its local day."""
+def _route_file(path, los, his, get_acc, seen=None, meta=None, keep=None, days=None):
+    """Like extract.scan_file, but feeds each record to the accumulator of its local day.
+
+    meta: an accumulator for the session's title records, which belong to the
+    whole session. keep: an optional function from a local day to True or False
+    (scope.Gate); days is the list of local days the slots stand for.
+    """
     def slot(ts):
         k = bisect.bisect_right(los, ts) - 1
-        return k if k >= 0 and ts < his[k] else None
+        if k < 0 or ts >= his[k]:
+            return None
+        if keep is not None and days is not None and not keep(days[k]):
+            return None
+        return k
 
     cur = None
     try:
@@ -661,12 +1090,21 @@ def _route_file(path, los, his, get_acc, seen=None):
         return
     with fh:
         for line in fh:
+            if line.startswith(E.UNTIMED_TYPES):
+                if meta is not None:
+                    try:
+                        d = json.loads(line)
+                        if isinstance(d, dict) and d.get("type") in ("ai-title", "custom-title"):
+                            meta.feed({"type": d["type"], "aiTitle": d.get("aiTitle"),
+                                       "customTitle": d.get("customTitle")})
+                    except (ValueError, AttributeError, TypeError, KeyError):
+                        pass
+                continue
             i = line.rfind(E.TS_KEY)
-            if i >= 0:
-                cur = slot(line[i + 13:i + 32].decode("ascii", "replace"))
-                if cur is None:
-                    continue
-            elif cur is None or not line.startswith(E.UNTIMED_TYPES):
+            if i < 0:
+                continue
+            cur = slot(line[i + 13:i + 32].decode("ascii", "replace"))
+            if cur is None:
                 continue
             try:
                 d = json.loads(line)
@@ -697,11 +1135,22 @@ def empty_day():
             "out": 0, "sub_out": 0, "corrections": 0, "errors": 0, "compactions": 0, "peak": 0}
 
 
-def compute_days(days, projects_dir, scheduled):
+def _acc_hidden(a, pdir, hide, naming):
+    """True when the session this accumulator read is covered by an exclude rule."""
+    try:
+        if E.is_excluded(a, pdir, hide.rules):
+            return True
+        return PR.excluded(hide.rules, "", [naming.name(a, pdir)])
+    except Exception:
+        return True                     # cannot be checked, so it is not counted
+
+
+def compute_days(days, projects_dir, scheduled, hide=NO_HIDE):
     """Per-day totals for the given local days, from one pass over the transcripts.
 
     scheduled: set of 8-character ids already known to be scheduled-task runs;
     it is updated in place. Scheduled sessions only add to the "scheduled" count.
+    Sessions covered by an exclude rule are left out of every count.
     """
     days = sorted(days)
     out = dict((d, empty_day()) for d in days)
@@ -711,15 +1160,20 @@ def compute_days(days, projects_dir, scheduled):
     y, m, d = date_parts(days[0])
     lo = time.mktime((y, m, d, 0, 0, 0, 0, 0, -1))
     claimed = {}           # message ids already counted: resumed copies count once
-    for path, sid, _pdir, _size in E.oldest_first(E.find_sessions(projects_dir, lo)):
+    naming = E.Naming() if hide.rules else None
+    for path, sid, pdir, _size in E.oldest_first(E.find_sessions(projects_dir, lo)):
+        if hide.on and sid[:8].lower() in hide.ids:
+            continue
         accs = {}
+        gate = hide.scope.gate(sid, path)
+        meta = E.SessionAcc(sid)
 
         def get_acc(k, accs=accs, sid=sid, path=path):
             if k not in accs:
                 accs[k] = E.SessionAcc(sid, claimed=claimed, owner=path)
             return accs[k]
 
-        _route_file(path, los, his, get_acc)
+        _route_file(path, los, his, get_acc, meta=meta, keep=gate, days=days)
         subs = {}
         sub_dir = os.path.join(path[:-6], "subagents")
         if accs and os.path.isdir(sub_dir):
@@ -737,12 +1191,17 @@ def compute_days(days, projects_dir, scheduled):
                         continue
                 except OSError:
                     continue
-                _route_file(p, los, his, get_sub, seen)
+                _route_file(p, los, his, get_sub, seen, keep=gate, days=days)
                 for a in subs.values():
                     a._commit_usage()
                     a._mid = None
         for a in accs.values():
             a.finish()
+        if hide.rules and accs:
+            meta.cwd = next((a.cwd for a in accs.values() if a.cwd), None)
+            if _acc_hidden(meta, pdir, hide, naming):
+                continue
+        for a in accs.values():
             if a.kind == "scheduled":
                 scheduled.add(sid[:8])
         for k, a in accs.items():
@@ -766,8 +1225,13 @@ def compute_days(days, projects_dir, scheduled):
     return out
 
 
-def update_trend(reports_dir, projects_dir, today, scan=True):
-    """Load the cache, compute missing days plus the last two, save, return all days."""
+def update_trend(reports_dir, projects_dir, today, scan=True, hide=NO_HIDE):
+    """Load the cache, compute missing days plus the last two, save, return all days.
+
+    The cache keeps a fingerprint of the exclude rules. When the rules change,
+    every day is counted again, so that no day keeps excluded work in its totals.
+    A day whose transcripts are gone by then comes back empty.
+    """
     path = os.path.join(reports_dir, "digests", "trend.json")
     cache = read_json(path)
     if not isinstance(cache, dict) or not isinstance(cache.get("days"), dict):
@@ -783,16 +1247,24 @@ def update_trend(reports_dir, projects_dir, today, scan=True):
     cache["days"] = days
     if not isinstance(cache.get("scheduled"), list):
         cache["scheduled"] = []
-    cache["scheduled"] = [s for s in cache["scheduled"] if isinstance(s, str)]
+    cache["scheduled"] = [s for s in cache["scheduled"]
+                          if isinstance(s, str) and s[:8].lower() not in hide.ids]
+    sig = hide.scope.sig()
+    stale = (cache.get("exclude_sig") or "") != sig
     if not scan:
-        return cache["days"]
+        return {} if stale else cache["days"]      # never show totals counted under other rules
     window = [day_shift(today, -i) for i in range(TREND_DAYS, 0, -1)]
     need = [d for d in window if d not in cache["days"]]
     for d in window[-2:]:
         if d not in need:
             need.append(d)
+    if stale:
+        need = sorted(set(need) | set(cache["days"]))
+        cache.pop("exclude_sig", None)
+        if sig:
+            cache["exclude_sig"] = sig
     scheduled = set(cache.get("scheduled") or [])
-    cache["days"].update(compute_days(need, projects_dir, scheduled))
+    cache["days"].update(compute_days(need, projects_dir, scheduled, hide))
     cache["scheduled"] = sorted(scheduled)
     blob = json.dumps(cache, sort_keys=True, separators=(",", ":"))
     try:
@@ -1047,7 +1519,8 @@ def render_trends(all_days, today):
 # ---------- cost ----------
 
 def digest_cost(digest):
-    """Day cost and top project from a digest. Empty for a digest written before costs existed."""
+    """Day cost and top project from a digest. Empty for a digest written before costs
+    existed, or when the cost cannot be given without excluded work in it."""
     t = (digest or {}).get("totals") or {}
     c = t.get("cost")
     if not isinstance(c, dict) or not isinstance(c.get("usd"), (int, float)):
@@ -1115,10 +1588,11 @@ def _period_view(t):
                          for r in t["by_model"][:30]]}
 
 
-def load_cost(reports_dir, today, ledger_path=None):
+def load_cost(reports_dir, today, ledger_path=None, hide=NO_HIDE):
     """Everything the Cost view shows, from the ledger. None when there is no ledger data yet."""
     try:
         led, _existed = L.load(ledger_path)
+        led = L.visible(led, hide.scope)
         days = sorted(d for d in led["days"] if d < today) or sorted(led["days"])
         if not days:
             return None, ""
@@ -1128,7 +1602,7 @@ def load_cost(reports_dir, today, ledger_path=None):
         series = L.daily_series(led, window)
     except (AttributeError, TypeError, ValueError, KeyError, OverflowError, OSError):
         return None, ""
-    digest = read_json(os.path.join(reports_dir, "digests", "daily-%s.json" % anchor))
+    digest, _seen = read_digest(os.path.join(reports_dir, "digests", "daily-%s.json" % anchor), hide)
     try:
         sessions = digest_sessions(digest)
     except (AttributeError, TypeError, ValueError, KeyError, OverflowError):
@@ -1145,6 +1619,8 @@ def load_cost(reports_dir, today, ledger_path=None):
                 {"key": "all", "label": "All time",
                  "title": "Since %s" % long_date(per["since"]), "t": _period_view(per["all"])}],
             "sessions": sessions}
+    if hide.scope.only:
+        data["oneAccount"] = True          # a quiet line; never which account
     values = [s["usd"] for s in series]
     title = "Cost per day, API-equivalent"
     latest = "no data"
@@ -1158,8 +1634,12 @@ def load_cost(reports_dir, today, ledger_path=None):
     return data, chart
 
 
-def parse_cost_block(lines):
-    """The weekly `## Cost by project` table to rows of text cells, plus its note line."""
+def parse_cost_block(lines, hide=NO_HIDE):
+    """The weekly `## Cost by project` table to rows of text cells, plus its note line.
+
+    The row of an excluded project is dropped, and with it the Total row, which
+    was added up with that project in it.
+    """
     rows, note = [], []
     for line in lines:
         s = line.strip()
@@ -1168,7 +1648,13 @@ def parse_cost_block(lines):
                 rows.append([cut(c, 80) for c in _split_row(s)][:6])
         elif s:
             note.append(s)
-    return {"head": rows[0] if rows else [], "rows": rows[1:13], "note": cut(" ".join(note), 300)}
+    head, body = (rows[0] if rows else []), rows[1:13]
+    kept = [r for r in body if not hide.deep(r)]
+    if len(kept) != len(body):
+        kept = [r for r in kept if (r[0] if r else "").strip().lower() != "total"]
+    if hide.deep(head):
+        head, kept = [], []
+    return {"head": head, "rows": kept, "note": cut(visible_sentences(" ".join(note), hide), 300)}
 
 
 # ---------- page ----------
@@ -1189,6 +1675,339 @@ def render_baseline(summary, details):
     return "".join(out)
 
 
+# ---------- sections from the other coach modules ----------
+# Every string from a module or a report goes through esc() here. Nothing is
+# placed in the page as markup except the excerpt evidence.page_block() built.
+
+def plain(text):
+    """Text from a module that hands out HTML-escaped strings, as plain text again."""
+    return html.unescape("" if text is None else str(text))
+
+
+def show_day(day):
+    day = str(day or "")
+    return short_date(day) + " " + day[:4] if real_date(day) else day
+
+
+def home_as_tilde(path):
+    path = str(path or "")
+    for home in (C.HOME, os.path.expanduser("~")):
+        if home and home != "/" and (path == home or path.startswith(home + os.sep)):
+            return "~" + path[len(home):]
+    return path
+
+
+def table_html(head, rows, cls=""):
+    """head: [(label, kind)], rows: lists of cells already made safe.
+
+    kind: True for a number (right-aligned), "nw" for a cell that must not wrap
+    (a date), "wide" for prose that needs room, False for the rest.
+    """
+    def attr(kind):
+        return ' class="%s"' % ("n" if kind is True else kind) if kind else ""
+
+    out = ['<div class="panel-t scroll"><table%s><thead><tr>' % (' class="%s"' % cls if cls else "")]
+    out.extend('<th scope="col"%s>%s</th>' % (attr(kind), esc(label)) for label, kind in head)
+    out.append("</tr></thead><tbody>")
+    for row in rows:
+        out.append("<tr>%s</tr>" % "".join(
+            "<td%s>%s</td>" % (attr(head[i][1]), cell) for i, cell in enumerate(row)))
+    out.append("</tbody></table></div>")
+    return "".join(out)
+
+
+FT_GOOD = ("better", "not seen again")
+FT_BAD = ("worse", "recurred")
+
+
+def status_pill(status):
+    """The status word in a chip. The colour only repeats what the word says."""
+    word = str(status or "").strip().lower()
+    cls = " better" if word in FT_GOOD else " worse" if word in FT_BAD else ""
+    return '<span class="pill%s">%s</span>' % (cls, esc(word)) if word else ""
+
+
+def followthrough_list(lines):
+    out = ['<ul class="ft panel">']
+    for f in lines:
+        applied = ('<span class="ft-applied">applied on %s</span>' % esc(show_day(f["applied"]))
+                   if f.get("applied") else "")
+        out.append('<li><span class="ft-head">%s%s</span><span class="ft-text">%s</span></li>'
+                   % (status_pill(f["status"]), applied, md_inline(f["text"])))
+    out.append("</ul>")
+    return "".join(out)
+
+
+def render_followthrough(weekly, data, hide=NO_HIDE):
+    """The latest weekly's follow-through lines, then every piece of advice on record."""
+    out = []
+    lines = (weekly or {}).get("followthrough") or []
+    if lines:
+        out.append('<p class="muted">From the weekly review: %s.</p>' % esc(weekly["label"]))
+        out.append(followthrough_list(lines))
+    rows = []
+    advice = data.get("advice") if isinstance(data, dict) else None
+    for r in advice if isinstance(advice, list) else []:
+        if not isinstance(r, dict) or hide.deep(r) or not r.get("do"):
+            continue
+        times = r.get("times") if isinstance(r.get("times"), int) else 1
+        rows.append([md_inline(cut(str(r["do"]), 300))
+                     + (' <span class="pill repeat">given again</span>' if times > 1 else ""),
+                     esc(times), esc(show_day(r.get("first"))), esc(show_day(r.get("last"))),
+                     esc(show_day(r["applied"])) if r.get("applied") else ""])
+    if rows:
+        out.append('<h4 class="sub2">Advice given so far</h4>')
+        out.append(table_html([("Advice", "wide"), ("Times given", True), ("First", "nw"),
+                               ("Last", "nw"), ("Applied", "nw")], rows[:40]))
+        if len(rows) > 40:
+            out.append('<p class="muted">The 40 pieces of advice given most often.</p>')
+    if not out:
+        return ""
+    return '<section class="block"><h3 class="sub">Follow-through</h3>%s</section>' % "".join(out)
+
+
+def _cmp_num(v, kind):
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return "-"
+    if kind == "cost":
+        return "$%.2f" % v
+    if kind == "share":
+        return "%.1f%%" % v
+    a = abs(v)
+    if a >= 1e4:
+        return fmt_num(v, "tok")
+    if isinstance(v, float) and v != int(v):
+        return "%.2f" % v if a < 100 else "%.0f" % v
+    return "%d" % v
+
+
+def _cmp_pct(v):
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return ""
+    return "%+d%%" % int(round(v))
+
+
+CMP_STATES = {"improvement": " better", "regression": " worse"}
+
+
+def _cmp_state(row):
+    word = str(row.get("state") or "").replace("_", " ")
+    return '<span class="pill%s">%s</span>' % (CMP_STATES.get(row.get("state"), ""), esc(word))
+
+
+def _cmp_period(name, p):
+    p = p if isinstance(p, dict) else {}
+    bits = []
+    if isinstance(p.get("days"), (int, float)):
+        bits.append("%d %s" % (p["days"], "day" if p["days"] == 1 else "days"))
+    if isinstance(p.get("sessions_seen"), int):
+        bits.append("%d %s" % (p["sessions_seen"], "session" if p["sessions_seen"] == 1 else "sessions"))
+    return "<li><b>%s</b> %s to %s%s</li>" % (
+        esc(name), esc(show_day(p.get("first_day"))), esc(show_day(p.get("last_day"))),
+        esc(" (%s)" % ", ".join(bits)) if bits else "")
+
+
+def render_compare(block, hide=NO_HIDE):
+    """Before and after, from the stored comparison: highlights, then the full table folded."""
+    data = block.get("data") if isinstance(block, dict) else None
+    if not isinstance(data, dict):
+        return ""
+    def shown(key):
+        got = data.get(key)
+        return [r for r in got if isinstance(got, list) and isinstance(r, dict) and r.get("key")
+                and not hide.text(str(r.get("label") or ""), str(r["key"]))] \
+            if isinstance(got, list) else []
+
+    metrics = shown("metrics")
+    by_key = dict((r["key"], r) for r in metrics + shown("findings"))
+    out = ['<ul class="periods">%s%s</ul>' % (_cmp_period("Before", data.get("before")),
+                                              _cmp_period("After", data.get("after")))]
+    for note in data.get("notes") or []:
+        if isinstance(note, str) and not hide.text(note):
+            out.append('<p class="muted">%s</p>' % esc(cut(note, 400)))
+    high = []
+    for key in data.get("highlights") if isinstance(data.get("highlights"), list) else []:
+        r = by_key.get(key) if isinstance(key, str) else None
+        if not r:
+            continue
+        basis = r.get("basis")
+        if basis:
+            move = "%s to %s %s" % (_cmp_num(r.get("norm_before"), r.get("kind")),
+                                    _cmp_num(r.get("norm_after"), r.get("kind")), basis)
+        else:
+            move = "%s to %s" % (_cmp_num(r.get("before"), r.get("kind")),
+                                 _cmp_num(r.get("after"), r.get("kind")))
+        high.append([esc(cut(str(r.get("label") or key), 80)), esc(move),
+                     esc(_cmp_pct(r.get("norm_pct") if basis else r.get("pct"))), _cmp_state(r)])
+    if high:
+        out.append(table_html([("Measure", False), ("Before to after", "wide"), ("Change", True),
+                               ("Result", False)], high))
+    full = []
+    for r in metrics:
+        norm = ""
+        if r.get("basis"):
+            norm = "%s to %s %s" % (_cmp_num(r.get("norm_before"), r.get("kind")),
+                                    _cmp_num(r.get("norm_after"), r.get("kind")), r["basis"])
+        full.append([esc(cut(str(r.get("label") or r["key"]), 80)),
+                     esc(_cmp_num(r.get("before"), r.get("kind"))),
+                     esc(_cmp_num(r.get("after"), r.get("kind"))),
+                     esc(_cmp_pct(r.get("norm_pct") if r.get("basis") else r.get("pct"))),
+                     esc(norm), _cmp_state(r)])
+    if full:
+        out.append('<details class="fold"><summary>Every measure as a table</summary>%s</details>'
+                   % table_html([("Measure", False), ("Before", True), ("After", True),
+                                 ("Change", True), ("Normalised", False), ("Result", False)], full))
+    if not high and not full:
+        return ""
+    return '<section class="block"><h3 class="sub">Before and after</h3>%s</section>' % "".join(out)
+
+
+def render_unused(data, hide=NO_HIDE):
+    """Set up but unused, from the saved config audit (strings are plain text here)."""
+    if not isinstance(data, dict):
+        return ""
+    out = []
+    if isinstance(data.get("tokens_per_turn"), (int, float)):
+        total = "Always on: about %s tokens on every turn" % fmt_num(data["tokens_per_turn"], "tok")
+        if isinstance(data.get("window_tokens"), (int, float)) and data.get("window"):
+            total += ", about %s tokens over %s" % (fmt_num(data["window_tokens"], "tok"),
+                                                    data["window"])
+            if isinstance(data.get("turns"), int):
+                total += " (%d turns)" % data["turns"]
+        if isinstance(data.get("usd_cache_read"), (int, float)):
+            total += ", about %s at the cache read rate" % fmt_num(data["usd_cache_read"], "usd")
+        out.append('<p class="lede">%s.</p>' % esc(total))
+    lines = [x for x in data.get("lines") or [] if isinstance(x, str) and not hide.text(x)]
+    if lines:
+        out.append('<ul class="plain">%s</ul>'
+                   % "".join("<li>%s</li>" % md_inline(cut(x, 400)) for x in lines[:5]))
+    rows = []
+    for r in data.get("rows") or []:
+        if not isinstance(r, dict) or hide.deep(r):
+            continue
+        name = esc(cut(str(r.get("name") or "?"), 80))
+        if r.get("unused"):
+            name += ' <span class="pill warn">unused</span>'
+        rows.append([esc(r.get("kind") or ""), name, esc(cut(str(r.get("scope") or ""), 60)),
+                     esc(fmt_num(r["tokens_per_turn"], "tok"))
+                     if isinstance(r.get("tokens_per_turn"), (int, float)) else "",
+                     "" if r.get("uses") is None else esc(r["uses"]),
+                     esc(cut(str(r.get("last_used") or ""), 40))])
+    if rows:
+        out.append(table_html([("Kind", False), ("Name", False), ("Scope", False),
+                               ("Tokens per turn", True), ("Uses", True), ("Last used", False)], rows))
+    if not lines and not rows:
+        return ""
+    if data.get("note"):
+        out.append('<p class="muted">%s</p>' % esc(cut(str(data["note"]), 300)))
+    return '<section class="block"><h3 class="sub">Set up but unused</h3>%s</section>' % "".join(out)
+
+
+def render_fixes(data, hide=NO_HIDE):
+    """Fixes the person said yes to. Absent when there are none."""
+    rows = []
+    items = data.get("applied") if isinstance(data, dict) else None
+    for r in items if isinstance(items, list) else []:
+        if not isinstance(r, dict) or hide.deep(r):
+            continue
+        status = str(r.get("status") or "")
+        rows.append([esc(show_day(str(r.get("date") or "")[:10])), esc(cut(str(r.get("type") or ""), 40)),
+                     "<code>%s</code>" % esc(cut(home_as_tilde(r.get("target")), 160)),
+                     esc(cut(str(r.get("summary") or ""), 300)),
+                     esc(cut(str(r.get("reason") or ""), 300)),
+                     '<span class="pill%s">%s</span>' % (" better" if status == "applied" else "",
+                                                         esc(status))])
+    if not rows:
+        return ""
+    return ('<section class="block"><h3 class="sub">Fixes applied</h3>%s</section>'
+            % table_html([("Date", "nw"), ("Type", False), ("File", "wide"), ("Change", "wide"),
+                          ("Why", "wide"), ("Status", False)], rows[:60]))
+
+
+STATUSLINE_MODES = {
+    "coach": "On, as the whole status line.",
+    "coach_wrap": "On, added to the status line you already had.",
+    "unset": "Off: no status line is set.",
+    "other": "Off: another status line is set.",
+    "unreadable": "Off: the settings file could not be read.",
+}
+
+
+def render_statusline(data):
+    """A small card: on or off and the mode, what each part means, the thresholds."""
+    if not isinstance(data, dict):
+        return ""
+    state = plain(data.get("state"))
+    on = bool(data.get("on"))
+    mode = STATUSLINE_MODES.get(state, "On." if on else "Off.")
+    if on and data.get("coach_off"):
+        mode += " The coach is switched off, so it shows nothing for now."
+    out = ['<div class="hl-head"><h3 class="sub">Status line</h3>'
+           '<span class="pill%s">%s</span></div><p>%s</p>'
+           % (" better" if on else "", "on" if on else "off", esc(mode))]
+    legend = [["<code>%s</code>" % esc(plain(r.get("part"))), esc(plain(r.get("meaning")))]
+              for r in data.get("legend") or [] if isinstance(r, dict)]
+    if legend:
+        out.append(table_html([("It shows", False), ("Meaning", False)], legend, "wrapcol"))
+    marks = [[esc(plain(r.get("name"))), esc(plain(r.get("value")))]
+             for r in data.get("thresholds") or [] if isinstance(r, dict)]
+    if marks:
+        out.append('<h4 class="sub2">Thresholds</h4>')
+        out.append(table_html([("Marker", False), ("Shows at", False)], marks, "wrapcol"))
+    return '<section class="block card">%s</section>' % "".join(out)
+
+
+def module_sections(reports_dir, today, weeklies, hide=NO_HIDE):
+    """(progress html, setup html). Each part is built on its own: a module that
+    is missing or fails leaves its part out and nothing else."""
+    def part(name, build):
+        mod = optional(name)
+        return (guarded(build, mod) or "") if mod is not None else ""
+
+    progress = [
+        part("followthrough", lambda m: render_followthrough(
+            weeklies[0] if weeklies else None, guarded(m.page_data, reports_dir, today) or {}, hide)),
+        part("compare", lambda m: render_compare(m.page_block(), hide)),
+    ]
+    def unused(m):
+        report = m.latest(reports_dir)
+        return render_unused(m.page_data(report, escape=False), hide) if report is not None else ""
+
+    setup = [
+        part("config_audit", unused),
+        part("applyfix", lambda m: render_fixes(m.page_data(), hide)),
+        part("statusline", lambda m: render_statusline(m.page_data())),
+    ]
+    return "".join(progress), "".join(setup)
+
+
+def attach_item_evidence(dailies, weeklies, projects_dir, hide=NO_HIDE):
+    """Give the items of the newest dailies and the newest weekly their evidence:
+    it["ev"] = {"tag", "open", "tpl"}. Returns the <template> elements that hold
+    the excerpts. An excerpt is the markup evidence.page_block() made, already
+    escaped, and it goes into the page as it is."""
+    if EV is None:
+        return ""
+    out = []
+    groups = [("d%d" % i, "daily-%s" % d["date"], d) for i, d in enumerate(dailies[:EVIDENCE_DAILIES])]
+    groups += [("w%d" % i, "weekly-%s" % w["date"], w) for i, w in enumerate(weeklies[:1])]
+    for prefix, stem, entry in groups:
+        for it in entry["items"]:
+            if not it.get("tag"):
+                continue
+            blk = guarded(lambda: EV.page_block(it["what"], projects_dir, on_page=None, stem=stem))
+            if not isinstance(blk, dict) or hide.text(str(blk.get("tag") or "")):
+                continue
+            ev = {"tag": cut(str(blk.get("tag") or it["tag"]), 200),
+                  "open": cut(str(blk.get("open") or ""), 300), "tpl": None}
+            excerpt = blk.get("html")
+            if isinstance(excerpt, str) and excerpt and not hide.text(excerpt, html.unescape(excerpt)):
+                ev["tpl"] = "ev-%s-%d" % (prefix, it["n"])
+                out.append('<template id="%s">%s</template>' % (ev["tpl"], excerpt))
+            it["ev"] = ev
+    return "".join(out)
+
+
 def card(dailies):
     if not dailies:
         return {"date": None, "items": [], "counts": {}}
@@ -1196,7 +2015,7 @@ def card(dailies):
     items = [C.one_line(it["do"] or it["what"], 160) for it in d["items"][:5]]
     if not items and d.get("note"):
         items = [C.one_line(d["note"], 160)]
-    counts = dict(d.get("counts") or {})
+    counts = dict((k, v) for k, v in (d.get("counts") or {}).items() if v is not None)
     counts["items"] = len(d["items"])
     counts["findings"] = sum(len(v) for v in d.get("findings", {}).values()) + len(d.get("other", []))
     out = {"date": d["date"], "items": items, "counts": counts}
@@ -1212,10 +2031,20 @@ def card(dailies):
 def build_page(reports_dir, projects_dir=None, today=None, scan=True, ledger_path=None):
     """Returns (html, card dict)."""
     today = today or time.strftime("%Y-%m-%d")
-    dailies = load_dailies(reports_dir)
-    weeklies = load_weeklies(reports_dir)
-    summary, details, base_mtime = load_baseline(reports_dir)
-    trend = update_trend(reports_dir, projects_dir or C.PROJECTS_DIR, today, scan)
+    hide = load_hide(ledger_path)
+    dailies = load_dailies(reports_dir, hide)
+    weeklies = load_weeklies(reports_dir, hide)
+    summary, details, base_mtime = load_baseline(reports_dir, hide)
+    trend = update_trend(reports_dir, projects_dir or C.PROJECTS_DIR, today, scan, hide)
+    excerpts = guarded(attach_item_evidence, dailies, weeklies, projects_dir, hide) or ""
+    progress, setup = guarded(module_sections, reports_dir, today, weeklies, hide) or ("", "")
+    if not setup:
+        setup = ('<div class="empty"><p class="empty-title">Nothing to show yet.</p>'
+                 '<p>What is set up but unused, the fixes applied and the status line appear here.</p></div>')
+    if not progress:
+        progress = ('<div class="empty"><p class="empty-title">Nothing to follow up yet.</p>'
+                    '<p>This fills in once advice has been given and a later week can be '
+                    'set against it.</p></div>')
 
     dates = [d["date"] for d in dailies[:1]] + [w["date"] for w in weeklies[:1]]
     dates += [d for d in trend if trend[d].get("sessions") and d < today]
@@ -1231,7 +2060,7 @@ def build_page(reports_dir, projects_dir=None, today=None, scan=True, ledger_pat
         one = ('<p class="onething"><span class="one-label">Do today</span>'
                '<span class="one-text">%s</span></p>' % md_inline(cap(dailies[0]["items"][0]["do"])))
 
-    cost, cost_chart = load_cost(reports_dir, today, ledger_path)
+    cost, cost_chart = load_cost(reports_dir, today, ledger_path, hide)
     if cost:
         cost_html = cost_chart
     else:
@@ -1242,8 +2071,9 @@ def build_page(reports_dir, projects_dir=None, today=None, scan=True, ledger_pat
             "contextLine": CONTEXT_LINE, "cost": cost}
     values = {"NEWEST": esc(newest), "ONE": one, "TRENDS": render_trends(trend, today),
               "BASELINE": render_baseline(summary, details), "DATA": json_for_script(data),
-              "COST": cost_html}
-    page = re.sub(r"\{\{(NEWEST|ONE|TRENDS|BASELINE|DATA|COST)\}\}", lambda m: values[m.group(1)], PAGE)
+              "COST": cost_html, "PROGRESS": progress, "SETUP": setup, "EXCERPTS": excerpts}
+    page = re.sub(r"\{\{(NEWEST|ONE|TRENDS|BASELINE|DATA|COST|PROGRESS|SETUP|EXCERPTS)\}\}",
+                  lambda m: values[m.group(1)], PAGE)
     return clean(page), card(dailies)
 
 
@@ -1306,7 +2136,7 @@ button, select { font: inherit; color: inherit; }
 .brand { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
 .brand h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
 .brand .newest { color: var(--ink-3); font-size: 13px; font-variant-numeric: tabular-nums; }
-.tabs { display: flex; gap: 2px; margin-left: -10px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 0 2px; margin-left: -10px; }
 .tabs a { padding: 8px 10px; color: var(--ink-2); text-decoration: none; font-weight: 500; font-size: 14px; border-bottom: 2px solid transparent; white-space: nowrap; }
 .tabs a:hover { color: var(--ink); }
 .tabs a[aria-current="page"] { color: var(--accent); border-bottom-color: var(--accent); }
@@ -1353,7 +2183,7 @@ select.btn { padding-right: 6px; max-width: 100%; }
 .pill.new { background: var(--accent-soft); color: var(--accent); }
 
 details > summary { cursor: pointer; }
-.evidence > summary { font-size: 13px; color: var(--accent); font-weight: 500; width: fit-content; }
+.evidence > summary { font-size: 13px; color: var(--accent); font-weight: 500; width: fit-content; padding-block: 8px; }
 .evidence[open] > summary { margin-bottom: 10px; }
 .ev-body { display: flex; flex-direction: column; gap: 12px; }
 .sess { background: var(--bg); border-radius: var(--r); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
@@ -1369,9 +2199,43 @@ details > summary { cursor: pointer; }
 .finds .fh { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .finds .pat { font-family: var(--mono); font-size: 12px; }
 .finds .sug { color: var(--ink-2); }
+.ev-where { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: 13px; min-width: 0; }
+.ev-where .lab { color: var(--ink-3); font-size: 12px; }
+.ev-where code, td code, .finds code, .codebox pre code { font-size: 12px; }
+.evidence-slice { background: var(--bg); border-radius: var(--r); min-width: 0; }
+.evidence-slice > summary { padding: 9px 12px; font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.evidence-note { color: var(--ink-3); font-size: 12px; margin: 0 12px 8px; }
+.evidence-slice.gone .evidence-note { margin-bottom: 0; padding-bottom: 10px; }
+.evidence-rows { list-style: none; margin: 0 12px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.ev-row { display: flex; flex-direction: column; gap: 1px; padding: 6px 8px; border-left: 3px solid var(--line); min-width: 0; }
+.ev-row.ev-focus { border-left-color: var(--accent); background: var(--accent-soft); }
+.ev-meta { font-family: var(--mono); font-size: 12px; color: var(--ink-3); overflow-wrap: anywhere; }
+.ev-focus .ev-meta { color: var(--ink-2); }
+.ev-text { color: var(--ink-2); overflow-wrap: anywhere; white-space: pre-wrap; }
+.ev-focus .ev-text { color: var(--ink); }
+.evidence-open { display: none; } /* the same command sits above the excerpt with its copy button */
 .fold { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); min-width: 0; }
 .fold > summary { padding: 10px 14px; font-weight: 500; }
 .fold > :not(summary) { margin: 0 14px 14px; }
+
+.block { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.block.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px; }
+.block.card .sub { margin-top: 0; }
+.sub2 { font-size: 13px; font-weight: 600; color: var(--ink-2); margin-top: 4px; }
+.ft { list-style: none; }
+.ft > li { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; border-top: 1px solid var(--line); min-width: 0; }
+.ft > li:first-child { border-top: 0; }
+.ft-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.ft-applied { font-size: 12px; color: var(--ink-3); }
+.ft-text { max-width: 78ch; overflow-wrap: anywhere; }
+.periods { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 28px; font-size: 14px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.periods b { color: var(--ink); font-weight: 600; margin-right: 6px; }
+.plain { padding-left: 20px; display: flex; flex-direction: column; gap: 4px; max-width: 80ch; }
+.plain li { overflow-wrap: anywhere; }
+table.wrapcol td:first-child { min-width: 16ch; overflow-wrap: anywhere; }
+td.nw, th.nw { white-space: nowrap; }
+td.wide { min-width: 20ch; overflow-wrap: anywhere; }
+.checked { color: var(--ink-3); font-size: 12px; }
 
 .empty { background: var(--surface); border: 1px dashed var(--line); border-radius: var(--r); padding: 22px 18px; display: flex; flex-direction: column; gap: 4px; color: var(--ink-2); }
 .empty-title { color: var(--ink); font-weight: 600; font-size: 16px; }
@@ -1467,7 +2331,7 @@ td a.sid { font-family: var(--mono); }
   .codebar .btn { min-height: 44px; }
   th button.sort { min-height: 44px; line-height: 44px; min-width: 44px; }
   td a.sid { display: inline-block; min-height: 44px; line-height: 44px; }
-  .fold > summary, .evidence > summary, .patterns summary { padding-block: 13px; }
+  .fold > summary, .evidence > summary, .evidence-slice > summary, .patterns summary { padding-block: 13px; }
 }
 @media (max-width: 720px) {
   td.barcell, th.barcell, .opt { display: none; }
@@ -1487,6 +2351,8 @@ td a.sid { font-family: var(--mono); }
       <a href="#week" id="tab-week">This week</a>
       <a href="#cost" id="tab-cost">Cost</a>
       <a href="#trends" id="tab-trends">Trends</a>
+      <a href="#progress" id="tab-progress">Progress</a>
+      <a href="#setup" id="tab-setup">Setup</a>
       <a href="#baseline" id="tab-baseline">Baseline</a>
     </nav>
   </div>
@@ -1514,17 +2380,26 @@ td a.sid { font-family: var(--mono); }
     <h2 class="view-title">Trends</h2>
     {{TRENDS}}
   </section>
+  <section class="view" id="view-progress" aria-labelledby="tab-progress">
+    <h2 class="view-title">Progress</h2>
+    {{PROGRESS}}
+  </section>
+  <section class="view" id="view-setup" aria-labelledby="tab-setup">
+    <h2 class="view-title">Setup</h2>
+    {{SETUP}}
+  </section>
   <section class="view" id="view-baseline" aria-labelledby="tab-baseline">
     {{BASELINE}}
   </section>
 </main>
+{{EXCERPTS}}
 
 <script type="application/json" id="coach-data">{{DATA}}</script>
 <script>
 (function () {
   "use strict";
   var D = JSON.parse(document.getElementById("coach-data").textContent);
-  var VIEWS = ["today", "week", "cost", "trends", "baseline"];
+  var VIEWS = ["today", "week", "cost", "trends", "progress", "setup", "baseline"];
   var dayIdx = 0, weekIdx = 0, costIdx = 0;
 
   function h(tag, attrs) {
@@ -1580,6 +2455,7 @@ td a.sid { font-family: var(--mono); }
      [c.prompts, "typed prompts"], [mins(c.active_min), "active"],
      [tok(c.out_tokens), "output tokens"], [c.errors, "tool errors"],
      [c.corrections, "corrections"], [c.compactions, "compactions"]].forEach(function (p) {
+      if (p[0] == null || p[0] === "?") { return; }
       box.appendChild(h("span", null, h("b", { text: String(p[0]) }), p[1]));
     });
     return box;
@@ -1597,12 +2473,23 @@ td a.sid { font-family: var(--mono); }
     });
     return ul;
   }
+  /* One Evidence disclosure per item: where it happened and the command to open it,
+     the excerpt built from the transcript, then the digest facts for the sessions named. */
   function evidence(d, it) {
-    if (!it.ids || !it.ids.length) { return null; }
-    var n = 0;
-    it.ids.forEach(function (id) { n += (d.findings[id] || []).length; });
+    var ev = it.ev || null;
+    var ids = d.sessions && it.ids ? it.ids : [];
+    if (!ids.length && !ev) { return null; }
+    var n = 0, found = d.findings || {};
+    ids.forEach(function (id) { n += (found[id] || []).length; });
     var body = h("div", { class: "ev-body" });
-    it.ids.forEach(function (id) {
+    if (ev) {
+      body.appendChild(h("div", { class: "ev-where" }, h("span", { class: "lab", text: "Where" }), h("code", { text: ev.tag })));
+      var cmd = ev.open || it.evidence_cmd;
+      if (cmd) { body.appendChild(copyBox(cmd, "Command to open the evidence")); }
+      var tpl = ev.tpl ? document.getElementById(ev.tpl) : null;
+      if (tpl && tpl.content) { body.appendChild(tpl.content.cloneNode(true)); }
+    }
+    ids.forEach(function (id) {
       var s = d.sessions[id], box = h("div", { class: "sess" });
       box.appendChild(h("div", { class: "sess-head" }, h("code", { class: "sid", text: id }),
         h("span", { class: "proj", text: s ? s.project + (s.title ? ", " + s.title : "") : "Not in the digest for this day" }),
@@ -1619,12 +2506,14 @@ td a.sid { font-family: var(--mono); }
         }
         box.appendChild(dl);
       }
-      var fs = d.findings[id] || [];
+      var fs = found[id] || [];
       box.appendChild(fs.length ? findingList(fs, false) : h("div", { class: "muted", text: "No detector findings for this session." }));
       body.appendChild(box);
     });
-    return h("details", { class: "evidence" },
-      h("summary", { text: "Evidence: " + plural(it.ids.length, "session") + ", " + plural(n, "detector finding") }), body);
+    var parts = [];
+    if (ev) { parts.push(ev.tag); }
+    if (ids.length) { parts.push(plural(ids.length, "session") + ", " + plural(n, "detector finding")); }
+    return h("details", { class: "evidence" }, h("summary", { text: "Evidence: " + parts.join("; ") }), body);
   }
   function itemList(d, items, weekly) {
     var ol = h("ol", { class: "items panel" });
@@ -1636,7 +2525,7 @@ td a.sid { font-family: var(--mono); }
         field("do", "Do instead", it["do"] || "No action given.", mark),
         field("what", "What happened", it.what));
       if (weekly && it.trend) { body.appendChild(field("what", "Trend", it.trend)); }
-      if (!weekly) { var ev = evidence(d, it); if (ev) { body.appendChild(ev); } }
+      var ev = evidence(d, it); if (ev) { body.appendChild(ev); }
       ol.appendChild(h("li", null, h("span", { class: "rank", text: String(it.n) }), body));
     });
     return ol;
@@ -1687,13 +2576,14 @@ td a.sid { font-family: var(--mono); }
     } else {
       root.appendChild(itemList(d, d.items, false));
     }
+    if (d.checked) { root.appendChild(h("p", { class: "checked", text: "Checked: " + d.checked })); }
     if (d.other && d.other.length) {
       root.appendChild(h("details", { class: "fold" },
         h("summary", { text: "Other detector findings (" + d.other.length + ")" }), findingList(d.other, true)));
     }
   }
 
-  function copyBox(text) {
+  function copyBox(text, label) {
     var code = h("code", { text: text });
     var btn = h("button", { type: "button", class: "btn", text: "Copy" });
     btn.addEventListener("click", function () {
@@ -1709,7 +2599,7 @@ td a.sid { font-family: var(--mono); }
       setTimeout(function () { btn.textContent = "Copy"; }, 2500);
     });
     return h("div", { class: "codebox" },
-      h("div", { class: "codebar" }, h("span", { text: "Change, ready to paste" }), btn),
+      h("div", { class: "codebar" }, h("span", { text: label || "Change, ready to paste" }), btn),
       h("div", { class: "scroll" }, h("pre", null, code)));
   }
   function renderWeek() {
@@ -1731,6 +2621,20 @@ td a.sid { font-family: var(--mono); }
     root.appendChild(bar);
     var st = stats(w.counts);
     if (st) { root.appendChild(st); }
+    if (w.followthrough && w.followthrough.length) {
+      root.appendChild(h("h3", { class: "sub", text: "Follow-through" }));
+      var ft = h("ul", { class: "ft panel" });
+      w.followthrough.forEach(function (f) {
+        var good = f.status === "better" || f.status === "not seen again";
+        var bad = f.status === "worse" || f.status === "recurred";
+        ft.appendChild(h("li", null,
+          h("span", { class: "ft-head" },
+            f.status ? h("span", { class: "pill" + (good ? " better" : bad ? " worse" : ""), text: f.status }) : null,
+            f.applied ? h("span", { class: "ft-applied", text: "applied on " + f.applied }) : null),
+          rich(h("span", { class: "ft-text" }), f.text)));
+      });
+      root.appendChild(ft);
+    }
     if (w.numbers) { root.appendChild(rich(h("p", { class: "lede" }), w.numbers)); }
     if (w.cost && w.cost.rows && w.cost.rows.length) {
       root.appendChild(h("h3", { class: "sub", text: "Cost by project" }));
@@ -1747,13 +2651,28 @@ td a.sid { font-family: var(--mono); }
       root.appendChild(h("div", { class: "panel-t scroll" }, ct));
       if (w.cost.note) { root.appendChild(h("p", { class: "muted", text: w.cost.note })); }
     }
+    if (w.compare_lines && w.compare_lines.length) {
+      root.appendChild(h("h3", { class: "sub", text: "Before and after" }));
+      var cl = h("ul", { class: "plain" });
+      w.compare_lines.forEach(function (x) { cl.appendChild(rich(h("li"), x)); });
+      root.appendChild(cl);
+    }
     if (!w.items.length && !w.proposals.length) {
       root.appendChild(emptyBox(w.note || "A clean week.", "No costly patterns and no proposed changes in this review."));
-      return;
     }
     if (w.items.length) {
       root.appendChild(h("h3", { class: "sub", text: "What cost the most" }));
       root.appendChild(itemList(w, w.items, true));
+    }
+    if (w.checked) { root.appendChild(h("p", { class: "checked", text: "Checked: " + w.checked })); }
+    if (w.unused && (w.unused.lines.length || w.unused.total)) {
+      root.appendChild(h("h3", { class: "sub", text: "Set up but unused" }));
+      if (w.unused.lines.length) {
+        var ul = h("ul", { class: "plain" });
+        w.unused.lines.forEach(function (x) { ul.appendChild(rich(h("li"), x)); });
+        root.appendChild(ul);
+      }
+      if (w.unused.total) { root.appendChild(rich(h("p", { class: "muted" }), w.unused.total)); }
     }
     if (w.proposals.length) {
       root.appendChild(h("h3", { class: "sub", text: "Proposed changes, not applied" }));
@@ -1902,6 +2821,7 @@ td a.sid { font-family: var(--mono); }
         "The session id opens that day's recap."));
     }
     root.appendChild(h("p", { class: "muted", text: "List prices as of " + C.pricesDate + ". All time means since " + C.since + ", the first day on record." }));
+    if (C.oneAccount) root.appendChild(h("p", { class: "muted", text: "Showing one account only." }));
   }
 
   function show(v) {
@@ -1958,6 +2878,11 @@ def main(argv=None):
     ap.add_argument("--card", action="store_true",
                     help="also print one JSON line with the latest daily's top items")
     args = ap.parse_args(argv)
+    if C.load_config().get("damaged"):
+        # never rebuild (or let a recap publish) a page when the rules for what
+        # to leave out cannot be read; the page already on disk is left as it is
+        sys.stderr.write("coach: %s\n" % C.config_problem())
+        return 2
     page, card_data = build_page(args.reports_dir, args.projects_dir, args.today, not args.no_trends,
                                  args.ledger)
     out_dir = os.path.dirname(os.path.abspath(args.out))

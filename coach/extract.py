@@ -3,7 +3,10 @@
 
 Streams each JSONL file line by line and never holds a whole file in memory.
 Only records whose timestamp falls inside the range are counted, so a session
-that runs for weeks contributes just the slice you asked for.
+that runs for weeks contributes just the slice you asked for. The session's
+title is the exception: title records are read from the whole transcript, so
+every slice of a session resolves to the same title and the same project.
+Sessions covered by an "exclude" rule in config.json are dropped entirely.
 
 Transcript text is treated as data only. Nothing in it is ever executed or
 followed.
@@ -26,12 +29,15 @@ try:
     from . import common as C
     from . import pricing as P
     from . import projects as PR
+    from . import scope as SC
 except ImportError:  # run as a script
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import common as C
     import pricing as P
     import projects as PR
+    import scope as SC
 
+last_hidden = set()     # first 8 characters of the sessions the latest run() left out
 TS_KEY = b'"timestamp":"'
 IDLE_SEC = 300          # gaps shorter than this count as active time
 LONG_GAP_SEC = 1800     # a pause this long before a prompt is an idle gap
@@ -64,6 +70,7 @@ class SessionAcc(object):
         self.scheduled_name = None
         self.titles = []
         self.custom_title = None
+        self.custom_titles = []
         self.prompts = []           # dicts: ep, text, len, key, flags
         self._recent_prompt = {}    # key -> ep, to drop duplicates
         self._corr_window = collections.deque(maxlen=5)
@@ -138,17 +145,22 @@ class SessionAcc(object):
         elif t == "system":
             st = d.get("subtype")
             if st == "compact_boundary":
-                cm = d.get("compactMetadata") or {}
+                cm = d.get("compactMetadata")
+                cm = cm if isinstance(cm, dict) else {}
                 self.compactions.append({"ep": ep, "trigger": cm.get("trigger"),
                                          "pre_tokens": cm.get("preTokens")})
             elif st == "api_error":
                 self.api_retries += 1
         elif t == "ai-title":
             v = d.get("aiTitle")
-            if v and v not in self.titles:
+            if isinstance(v, str) and v and v not in self.titles:
                 self.titles.append(v)
         elif t == "custom-title":
-            self.custom_title = d.get("customTitle") or self.custom_title
+            v = d.get("customTitle")
+            if isinstance(v, str) and v:
+                self.custom_title = v
+                if v not in self.custom_titles:
+                    self.custom_titles.append(v)
 
     def _assistant(self, d):
         m = d.get("message")
@@ -238,7 +250,8 @@ class SessionAcc(object):
         """Kept for callers; usage is counted as it is read."""
 
     def _user(self, d, ep, prev):
-        m = d.get("message") or {}
+        m = d.get("message")
+        m = m if isinstance(m, dict) else {}
         content = m.get("content")
         texts = []
         images = 0
@@ -358,10 +371,12 @@ class SessionAcc(object):
             rec[0] += 1
 
     def _attachment(self, d, ep, prev):
-        a = d.get("attachment") or {}
+        a = d.get("attachment")
+        if not isinstance(a, dict):
+            return
         at = a.get("type")
         if at == "queued_command":
-            origin = a.get("origin") or {}
+            origin = a.get("origin") if isinstance(a.get("origin"), dict) else {}
             prompt = a.get("prompt")
             if not isinstance(prompt, str):
                 return
@@ -406,19 +421,55 @@ def session_title(a):
     return a.custom_title or (a.titles[0] if a.titles else "")
 
 
-def project_name(a, pdir, rules):
+def all_titles(a):
+    """Every title the session carried, the person's own first."""
+    return list(a.custom_titles) + [t for t in a.titles if t not in a.custom_titles]
+
+
+def project_name(a, pdir, rules, session_projects=None, other=None):
     no_folder = not a.cwd and "scratch-workspaces" in (pdir or "")
-    return PR.resolve(a.cwd or "", session_title(a), rules, no_folder=no_folder)
+    return PR.resolve(a.cwd or "", session_title(a), rules, no_folder=no_folder,
+                      session_id=a.id, session_projects=session_projects, titles=all_titles(a),
+                      other=other)
+
+
+def is_excluded(a, pdir, exclude):
+    """True when config.json says this session's work is never to be shown."""
+    if not exclude:
+        return False
+    return PR.excluded(exclude, a.id, [a.cwd or "", pdir or ""] + all_titles(a))
+
+
+class Naming(object):
+    """How sessions are named: project rules, per-session pins and the name for
+    one-off chats. Whatever is not given comes from config.json."""
+
+    def __init__(self, rules=None, session_projects=None, other=None, cfg=None):
+        if rules is None or session_projects is None:
+            cfg = cfg if cfg is not None else C.load_config()
+        self.rules = cfg.get("projects") if rules is None else rules
+        self.pins = cfg.get("session_projects") if session_projects is None else session_projects
+        self.other = other if other is not None else (cfg or {}).get("other_project")
+
+    def name(self, a, pdir):
+        return project_name(a, pdir, self.rules, self.pins, self.other)
 
 
 # ---------- scanning ----------
 
-def scan_file(path, lo_iso, hi_iso, acc, seen=None):
+def scan_file(path, lo_iso, hi_iso, acc, seen=None, keep=None):
     """Feed the in-range records of one JSONL file into acc. Returns bytes read.
 
     seen: optional set of record uuids, to skip records copied between files
     (forked and resumed subagents repeat their parent's history).
+
+    Title records (ai-title, custom-title) are fed whatever the range: they carry
+    no timestamp, and a session's title belongs to the whole session.
+
+    keep: an optional function from a local day to True or False (scope.Gate);
+    records on a day it refuses are skipped.
     """
+    day_of = C.day_lookup() if keep is not None else None
     in_range = False
     size = 0
     try:
@@ -428,14 +479,13 @@ def scan_file(path, lo_iso, hi_iso, acc, seen=None):
     with fh:
         for line in fh:
             size += len(line)
-            i = line.rfind(TS_KEY)
-            if i >= 0:
-                ts = line[i + 13:i + 32].decode("ascii", "replace")
-                in_range = lo_iso <= ts < hi_iso
-                if not in_range:
+            title = line.startswith(UNTIMED_TYPES)
+            if not title:
+                i = line.rfind(TS_KEY)
+                if i < 0:
                     continue
-            else:
-                if not in_range or not line.startswith(UNTIMED_TYPES):
+                ts = line[i + 13:i + 32].decode("ascii", "replace")
+                if not (lo_iso <= ts < hi_iso):
                     continue
             try:
                 d = json.loads(line)
@@ -443,8 +493,18 @@ def scan_file(path, lo_iso, hi_iso, acc, seen=None):
                 continue
             if not isinstance(d, dict):
                 continue
+            if title:
+                if d.get("type") in ("ai-title", "custom-title"):
+                    try:
+                        acc.feed({"type": d["type"], "aiTitle": d.get("aiTitle"),
+                                  "customTitle": d.get("customTitle")})
+                    except (AttributeError, TypeError, ValueError, KeyError):
+                        pass
+                continue
             ts = d.get("timestamp")
             if isinstance(ts, str) and not (lo_iso <= ts[:19] < hi_iso):
+                continue
+            if keep is not None and isinstance(ts, str) and not keep(day_of(ts)):
                 continue
             if seen is not None:
                 uid = d.get("uuid")
@@ -491,7 +551,7 @@ def oldest_first(sessions):
     return sorted(sessions, key=born)
 
 
-def scan_subagents(session_path, lo, lo_iso, hi_iso, claimed=None):
+def scan_subagents(session_path, lo, lo_iso, hi_iso, claimed=None, keep=None):
     """Light totals for a session's subagent transcripts."""
     sub_dir = os.path.join(session_path[:-6], "subagents")
     if not os.path.isdir(sub_dir):
@@ -507,7 +567,7 @@ def scan_subagents(session_path, lo, lo_iso, hi_iso, claimed=None):
             continue
         before = agg.tool_calls + agg.tok["out"]
         agg._mid = None
-        scan_file(p, lo_iso, hi_iso, agg, seen)
+        scan_file(p, lo_iso, hi_iso, agg, seen, keep)
         agg._commit_usage()
         if agg.tool_calls + agg.tok["out"] > before:
             files += 1
@@ -702,12 +762,21 @@ def read_inventory():
     return inv
 
 
-def read_permission_log(lo, hi):
-    """Aggregate the optional log written by coach/permlog.py."""
+def read_permission_log(lo, hi, skip=(), date_hidden=None, gates=None, gate_for=None):
+    """Aggregate the optional log written by coach/permlog.py.
+
+    skip: first 8 characters of sessions to leave out (excluded work).
+    date_hidden: an optional function from a local day to True for a day left out.
+    gates: {first 8 characters of a session id: scope.Gate}, to leave out the
+    days a session ran under another account. gate_for: for a session not in
+    gates (its transcript was not read), a function from the full session id to
+    a gate built from the evidence that needs no transcript.
+    """
+    gates = dict(gates or {})
     path = os.path.join(C.coach_home(), "permission-prompts.jsonl")
     groups = {}
     try:
-        fh = open(path, "r")
+        fh = open(path, "r", encoding="utf-8", errors="replace")
     except OSError:
         return None
     with fh:
@@ -716,9 +785,21 @@ def read_permission_log(lo, hi):
                 d = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(d, dict) or str(d.get("session") or "")[:8] in skip:
+                continue
             ep = d.get("ts")
             if not isinstance(ep, (int, float)) or not (lo <= ep < hi):
                 continue
+            if date_hidden is not None or gates or gate_for is not None:
+                day = C.epoch_local(ep, "%Y-%m-%d")
+                if date_hidden is not None and date_hidden(day):
+                    continue
+                sid = str(d.get("session") or "")
+                if sid[:8] not in gates and gate_for is not None and sid:
+                    gates[sid[:8]] = gate_for(sid)
+                gate = gates.get(sid[:8])
+                if gate is not None and not gate(day):
+                    continue
             tool = str(d.get("tool") or "?")
             cmd = str(d.get("cmd") or "")
             fam = C.command_family(cmd) if tool == "Bash" else ""
@@ -842,10 +923,13 @@ def cost_totals(accs):
 
 
 def run(since, until, session=None, project=None, max_bytes=150000,
-        projects_dir=None, subagents=True, inventory=True, rules=None):
+        projects_dir=None, subagents=True, inventory=True, rules=None,
+        session_projects=None, exclude=None, scope=None, other=None):
     projects_dir = projects_dir or C.PROJECTS_DIR
-    if rules is None:
-        rules = C.load_config().get("projects")
+    naming = Naming(rules, session_projects, other)
+    scope = SC.from_args(scope, exclude)
+    hidden = set()
+    gates = {}
     lo_iso, hi_iso = C.epoch_utc_iso(since), C.epoch_utc_iso(until)
     accs = []
     repeated = {}
@@ -854,14 +938,23 @@ def run(since, until, session=None, project=None, max_bytes=150000,
     claimed = {}
     for path, sid, pdir, _size in oldest_first(find_sessions(projects_dir, since, session, project)):
         a = SessionAcc(sid, claimed=claimed, owner=path)
-        scanned += scan_file(path, lo_iso, hi_iso, a)
+        gate = scope.gate(sid, path)
+        if gate is not None:
+            gates[sid[:8]] = gate
+        scanned += scan_file(path, lo_iso, hi_iso, a, keep=gate)
         a.finish()
         if a.first is None or (not a.prompts and not a.tool_calls and not a.by_model):
-            continue                      # nothing happened; a session that spent tokens stays
+            # nothing happened; a session that spent tokens stays
+            if scope.emptied(sid, gate):
+                hidden.add(sid[:8])       # a date or account rule left nothing of it
+            continue
+        a.project = naming.name(a, pdir)
+        if scope.hidden(a, pdir, a.project):
+            hidden.add(sid[:8])           # dropped whole: no totals, no prompts, no project
+            continue
         if subagents:
-            a.sub = scan_subagents(path, since, lo_iso, hi_iso, claimed)
+            a.sub = scan_subagents(path, since, lo_iso, hi_iso, claimed, gate)
         listed.update(a.skills_listed)
-        a.project = project_name(a, pdir, rules)
         accs.append((a, pdir))
         if a.kind != "scheduled":
             for p in a.prompts:
@@ -876,6 +969,8 @@ def run(since, until, session=None, project=None, max_bytes=150000,
 
     totals = collections.OrderedDict()
     totals["sessions"] = len(accs)
+    if hidden:
+        totals["excluded_sessions"] = len(hidden)     # a count only, never a name
     totals["scheduled_sessions"] = sum(1 for a, _ in accs if a.kind == "scheduled")
     totals["turns"] = sum(len(a.prompts) for a, _ in accs)
     totals["active_min"] = int(sum(a.active for a, _ in accs) / 60)
@@ -924,10 +1019,16 @@ def run(since, until, session=None, project=None, max_bytes=150000,
             break
 
     extras = collections.OrderedDict()
+    if scope.by_day:
+        extras["scope_sig"] = scope.day_sig()  # which account and date settings it was counted under
     extras["totals"] = totals
     extras["projects"] = project_totals(accs)
     extras["repeated_prompts"] = rep
-    perm = read_permission_log(since, until)
+    perm = read_permission_log(since, until, hidden | (scope.gone_ids() if scope.on else set()),
+                               scope.date_hidden if scope.dates else None, gates,
+                               (lambda sid: scope.gate(sid, None)) if scope.only else None)
+    global last_hidden
+    last_hidden = set(hidden)
     if perm is not None:
         extras["permission_prompts"] = perm
     if inventory:
@@ -973,4 +1074,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(C.run_main(main))

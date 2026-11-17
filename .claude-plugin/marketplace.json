@@ -10,8 +10,8 @@
     {
       "name": "agentic-coach",
       "source": "./",
-      "description": "Coaches you on your own Claude Code usage: daily recap, weekly review with proposed changes, and a one-line nudge after a costly turn. Runs on your machine; nothing is sent anywhere unless you choose to publish your own coach page.",
-      "version": "1.1.1",
+      "description": "Coaches you on your own Claude Code usage: daily recap, weekly review with proposed changes applied only after your yes, follow-through on earlier advice, and a one-line nudge after a costly turn. Runs on your machine; nothing is sent anywhere unless you choose to publish your own coach page.",
+      "version": "1.2.0",
       "author": {
         "name": "Deven Blackburn"
       },

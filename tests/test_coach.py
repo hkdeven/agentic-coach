@@ -384,8 +384,17 @@ class ConfigTest(unittest.TestCase):
         os.environ.update(self.old_env)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    @staticmethod
+    def cfg(**kw):
+        out = {"page_url": None, "notify": False, "projects": [], "session_projects": {},
+               "exclude": [], "evidence_on_page": True, "evidence_on_page_set": False,
+               "only_account": None, "unknown_account": "include", "exclude_dates": [],
+               "other_project": None, "damaged": False}
+        out.update(kw)
+        return out
+
     def test_defaults_when_there_is_no_file(self):
-        self.assertEqual(common.load_config(), {"page_url": None, "notify": False, "projects": []})
+        self.assertEqual(common.load_config(), self.cfg())
         out = recap.build([], today=self.today, projects_dir=self.projects)
         self.assertIsNone(out["page_url"])
         self.assertFalse(out["notify"])
@@ -397,7 +406,7 @@ class ConfigTest(unittest.TestCase):
     def test_set_show_unset(self):
         self.assertIsNone(config.change(["set", "page_url", self.URL]))
         self.assertIsNone(config.change(["set", "notify", "true"]))
-        self.assertEqual(common.load_config(), {"page_url": self.URL, "notify": True, "projects": []})
+        self.assertEqual(common.load_config(), self.cfg(page_url=self.URL, notify=True, evidence_on_page=False))
         out = recap.build(["week"], today=self.today, projects_dir=self.projects)
         self.assertEqual((out["page_url"], out["notify"]), (self.URL, True))
         self.assertNotIn("--card", out["page_build"])
@@ -409,7 +418,7 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue(recap.build([], today=self.today, projects_dir=self.projects)["notify"])
         self.assertIsNone(config.change(["unset", "page_url"]))
         self.assertIsNone(config.change(["set", "notify", "false"]))
-        self.assertEqual(common.load_config(), {"page_url": None, "notify": False, "projects": []})
+        self.assertEqual(common.load_config(), self.cfg())
 
     def test_bad_values_are_refused_or_ignored(self):
         for bad in (["set", "page_url", "http://claude.ai/x"], ["set", "page_url", "https://example.com/x"],
@@ -425,7 +434,10 @@ class ConfigTest(unittest.TestCase):
                      '{"page_url": 5, "notify": 1}'):
             with open(common.config_file(), "w") as fh:
                 fh.write(text)
-            self.assertEqual(common.load_config(), {"page_url": None, "notify": False, "projects": []}, text)
+            # a file that is not a JSON object also turns the page excerpts off
+            broken = text in ("not json", "[]")
+            self.assertEqual(common.load_config(),
+                             self.cfg(evidence_on_page=not broken, damaged=broken), text)
 
     def test_damaged_config_is_not_rewritten(self):
         os.makedirs(os.path.dirname(common.config_file()))
@@ -569,8 +581,10 @@ class PackagingTest(unittest.TestCase):
 
     def test_hooks_run_scripts_that_exist_with_a_five_second_limit(self):
         hooks = self.load("hooks", "hooks.json")["hooks"]
-        self.assertEqual(sorted(hooks), ["PermissionRequest", "Stop"])
-        for event, script in (("Stop", "nudge.py"), ("PermissionRequest", "permlog.py")):
+        self.assertEqual(sorted(hooks), ["PermissionRequest", "SessionStart", "Stop"])
+        self.assertEqual(hooks["SessionStart"][0]["matcher"], "startup|resume|clear")
+        for event, script in (("Stop", "nudge.py"), ("PermissionRequest", "permlog.py"),
+                              ("SessionStart", "accounts.py")):
             h = hooks[event][0]["hooks"][0]
             self.assertEqual(h["timeout"], 5)
             self.assertNotIn("async", h)

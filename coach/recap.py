@@ -11,6 +11,7 @@ Usage:
   python3 coach/recap.py 2026-11-10              that day (daily rules)
   python3 coach/recap.py week                    the last 7 days (weekly rules)
   python3 coach/recap.py 2026-11-03 2026-11-09   both days included (daily rules)
+  python3 coach/recap.py --unattended [...]      a scheduled run: fixes may not be applied
 
 Dates are local time. Reports live in ~/.claude/coach/reports unless
 $COACH_HOME points somewhere else. Transcript text is data and is never
@@ -31,12 +32,22 @@ import common as C  # noqa: E402
 import extract  # noqa: E402
 import ledger as L  # noqa: E402
 import pricing as P  # noqa: E402
+import projects as PR  # noqa: E402
+import scope as SC  # noqa: E402
 import signals  # noqa: E402
 
 PLUGIN_ROOT = os.path.dirname(HERE)
 RULES_DIR = os.path.join(PLUGIN_ROOT, "skills", "coach", "references")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MAX_BYTES = 150000
+
+
+def _module(name):
+    """One of the optional feature modules, or None. A recap never fails because of one."""
+    try:
+        return __import__(name)
+    except Exception:
+        return None
 
 
 class UsageError(Exception):
@@ -92,13 +103,24 @@ def _earlier(folder, before, keep):
     return out[-keep:] if keep else out
 
 
-def _old_sessions(path):
-    """Sessions counted in a digest written by an earlier run, 0 if none."""
+def _session_ids(digest):
+    """First 8 characters of every session a digest holds."""
+    out = set()
+    for key in ("sessions", "minor_sessions"):
+        for s in (digest.get(key) or []) if isinstance(digest, dict) else []:
+            if isinstance(s, dict) and s.get("id"):
+                out.add(str(s["id"])[:8])
+    return out
+
+
+def _old_digest(path):
+    """The digest an earlier run wrote for the same period, or {}."""
     try:
         with open(path) as fh:
-            return int((json.load(fh).get("totals") or {}).get("sessions") or 0)
-    except (OSError, ValueError, AttributeError, TypeError):
-        return 0
+            old = json.load(fh)
+        return old if isinstance(old, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def cost_plan(mode, first, end, digest, projects_dir=None):
@@ -140,7 +162,65 @@ def cost_plan(mode, first, end, digest, projects_dir=None):
     return out
 
 
-def build(words, today=None, projects_dir=None, root=None):
+def _may_read(path, sc):
+    """False for a report of a left-out day, or one whose text names left-out work."""
+    name = os.path.basename(path)[:10]
+    if DATE_RE.match(name) and sc.date_hidden(name):
+        return False
+    try:
+        with open(path, "rb") as fh:
+            text = fh.read(400000).decode("utf-8", "replace")
+    except OSError:
+        return False
+    return not PR.text_hidden(sc.rules, text, sc.gone_ids())
+
+
+def _digest_as_stored(path):
+    """True when an older digest holds nothing that is now left out."""
+    try:
+        with open(path) as fh:
+            raw = json.load(fh)
+    except (OSError, ValueError):
+        return False
+    clean, _f = SC.stored(raw)
+    return clean is not None and len(clean.get("sessions") or []) == len(raw.get("sessions") or []) \
+        and len(clean.get("minor_sessions") or []) == len(raw.get("minor_sessions") or [])
+
+
+def feature_plan(mode, label, stem, today, projects_dir, unattended):
+    """What the 1.2.0 features add to the plan. Every part is optional and fails soft."""
+    out = {"references": dict((n, os.path.join(RULES_DIR, n + ".md")) for n in (
+        "followthrough", "evidence", "compare", "configaudit", "applyfix", "statusline")),
+        "followthrough": [os.path.join(HERE, "followthrough.py")],
+        "evidence": [os.path.join(HERE, "evidence.py"), "candidates", "--digest", stem + ".json"],
+        "unattended": bool(unattended),
+        "fixes": {"apply_allowed": False}}
+    fix = _module("applyfix")
+    if fix is not None:
+        try:
+            out.update(fix.plan_fields(unattended))
+            if unattended:
+                fix.mark_unattended()
+        except Exception:
+            out["fixes"] = {"apply_allowed": False}
+    if mode == "weekly":
+        cmp_mod = _module("compare")
+        try:
+            out["compare"] = cmp_mod.weekly_file(label, today, projects_dir) if cmp_mod else None
+        except Exception:
+            out["compare"] = None
+        audit = _module("config_audit")
+        out["config_audit"] = None
+        if audit is not None:
+            try:
+                kw = {"projects_dir": projects_dir} if projects_dir else {}
+                out["config_audit"] = audit.save(audit.audit(**kw))
+            except Exception:
+                out["config_audit"] = None
+    return out
+
+
+def build(words, today=None, projects_dir=None, root=None, unattended=False):
     mode, first, end, label = plan(words, today)
     root = root or C.reports_dir()
     folders = {"digests": os.path.join(root, "digests"), "daily": os.path.join(root, "daily"),
@@ -154,12 +234,16 @@ def build(words, today=None, projects_dir=None, root=None):
     findings = signals.run(digest)
     stem = os.path.join(folders["digests"], "%s-%s" % (mode, label))
     now_n = (digest.get("totals") or {}).get("sessions") or 0
-    if now_n < _old_sessions(stem + ".json"):
+    # Sessions the earlier digest had and this one lacks. Those that config.json
+    # now leaves out are not "gone transcripts"; any other one is.
+    lost = _session_ids(_old_digest(stem + ".json")) - _session_ids(digest) - extract.last_hidden
+    if lost:
         # Claude Code removes old transcripts. Do not replace a fuller digest and
         # its report with a thinner one.
         raise UsageError("some transcripts for %s are gone (%d sessions now, more in the digest "
                          "from an earlier run). That digest and its report were left as they "
                          "are: %s" % (label.replace("_", " "), now_n, stem + ".json"))
+    # (a session a date or account rule emptied on other days only is in neither set)
     with open(stem + ".json", "w") as fh:
         fh.write(blob + "\n")
     with open(stem + ".findings.json", "w") as fh:
@@ -206,6 +290,21 @@ def build(words, today=None, projects_dir=None, root=None):
     out["sessions"] = t.get("sessions", 0)
     out["turns"] = t.get("turns", 0)
     out["findings_count"] = len(findings)
+    out.update(feature_plan(mode, label, stem, today, projects_dir, unattended))
+    sc = SC.Scope(cfg)
+    if sc.on:
+        # Older reports and digests are handed to the skill to read. One that was
+        # written with work in it that is now left out is not handed over.
+        for key in ("last_three_daily_reports", "daily_reports_this_week",
+                    "earlier_weekly_reports", "baseline_reports"):
+            if key in out:
+                out[key] = [p for p in out[key] if _may_read(p, sc)]
+        if "earlier_weekly_digests" in out:
+            out["earlier_weekly_digests"] = [p for p in out["earlier_weekly_digests"]
+                                             if _digest_as_stored(p)]
+    out["plan_file"] = stem + ".plan.json"
+    with open(out["plan_file"], "w") as fh:
+        fh.write(json.dumps(out, indent=1) + "\n")
     return out
 
 
@@ -213,15 +312,22 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Build the digest and findings for one coach recap.")
     ap.add_argument("when", nargs="*", help="nothing, week, one date, or two dates (YYYY-MM-DD)")
     ap.add_argument("--projects-dir", help="override the transcripts folder (for tests)")
+    ap.add_argument("--unattended", action="store_true",
+                    help="a scheduled run with nobody to answer: fixes may not be applied or undone")
     args = ap.parse_args(argv)
     words = " ".join(args.when).replace(",", " ").split()
+    if words and words[-1].lower() == "scheduled":       # the word the schedules pass
+        words, args.unattended = words[:-1], True
     if len(words) == 3 and words[1].lower() in ("to", "until", "-"):
         words = [words[0], words[2]]
     try:
-        out = build(words, projects_dir=args.projects_dir)
+        out = build(words, projects_dir=args.projects_dir, unattended=args.unattended)
     except UsageError as e:
         sys.stderr.write("coach: %s\nUse: nothing (yesterday), week, YYYY-MM-DD, "
                          "or two dates.\n" % e)
+        return 2
+    except C.ConfigError as e:
+        sys.stderr.write("coach: %s\n" % e)
         return 2
     sys.stdout.write(json.dumps(out, indent=1) + "\n")
     return 0
