@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Coach page, restyled</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button{font:inherit;cursor:pointer}
+</style>
+</helmet>
+<div style="min-height: 100vh; box-sizing: border-box; background: #111110; color: #f0efec; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif; font-size: 14px; line-height: 1.4; font-variant-numeric: tabular-nums">
+  <div style="max-width: 1320px; margin: 0 auto; padding: 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px">
+
+    <div style="display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px">
+      <div>
+        <div style="font-size: 17px; font-weight: 650">Agentic Coach</div>
+        <div style="font-size: 12.5px; color: #c3c2b7">Work account, data to Mon Nov 23</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: #c3c2b7">
+        <span style="width: 8px; height: 8px; border-radius: 4px; background: #0ca30c"></span>Live · updated 14:16:05
+      </div>
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px">
+      <div style="display: flex; flex-wrap: wrap; gap: 2px; background: #1a1a19; border: 1px solid #33332f; border-radius: 8px; padding: 2px">
+        <button type="button" style="padding: 5px 11px; border: 0; border-radius: 6px; font-size: 12.5px; font-weight: 550; background: #f0efec; color: #1a1a19">Overview</button>
+        <button type="button" style="padding: 5px 11px; border: 0; border-radius: 6px; font-size: 12.5px; font-weight: 550; background: transparent; color: #c3c2b7">Today</button>
+        <button type="button" style="padding: 5px 11px; border: 0; border-radius: 6px; font-size: 12.5px; font-weight: 550; background: transparent; color: #c3c2b7">This week</button>
+        <button type="button" style="padding: 5px 11px; border: 0; border-radius: 6px; font-size: 12.5px; font-weight: 550; background: transparent; color: #c3c2b7">Cost</button>
+        <button type="button" style="padding: 5px 11px; border: 0; border-radius: 6px; font-size: 12.5px; font-weight: 550; background: transparent; color: #c3c2b7">Trends</button>
+        <button type="button" style="padding: 5px 11px; border: 0; border-radius: 6px; font-size: 12.5px; font-weight: 550; background: transparent; color: #c3c2b7">Progress</button>
+        <button type="button" style="padding: 5px 11px; border: 0; border-radius: 6px; font-size: 12.5px; font-weight: 550; background: transparent; color: #c3c2b7">Setup</button>
+        <button type="button" style="padding: 5px 11px; border: 0; border-radius: 6px; font-size: 12.5px; font-weight: 550; background: transparent; color: #c3c2b7">Baseline</button>
+      </div>
+      <div style="display: flex; gap: 2px; background: #1a1a19; border: 1px solid #33332f; border-radius: 8px; padding: 2px" role="group" aria-label="Period">
+        <button type="button" style="padding: 5px 11px; border: 0; border-radius: 6px; font-size: 12.5px; font-weight: 550; background: transparent; color: #c3c2b7">Today</button>
+        <button type="button" style="padding: 5px 11px; border: 0; border-radius: 6px; font-size: 12.5px; font-weight: 550; background: transparent; color: #c3c2b7">7 days</button>
+        <button type="button" style="padding: 5px 11px; border: 0; border-radius: 6px; font-size: 12.5px; font-weight: 550; background: #f0efec; color: #1a1a19">30 days</button>
+        <button type="button" style="padding: 5px 11px; border: 0; border-radius: 6px; font-size: 12.5px; font-weight: 550; background: transparent; color: #c3c2b7">All time</button>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px">
+      <div style="background: #1a1a19; border: 1px solid #33332f; border-radius: 10px; padding: 11px 13px 12px">
+        <div style="font-size: 12px; color: #c3c2b7">Spend, last 30 days</div>
+        <div style="font-size: 22px; font-weight: 620; letter-spacing: -0.01em; line-height: 1.2">$7,203.44</div>
+        <div style="font-size: 12px; color: #8f8e85">API-equivalent, not a bill</div>
+      </div>
+      <div style="background: #1a1a19; border: 1px solid #33332f; border-radius: 10px; padding: 11px 13px 12px">
+        <div style="font-size: 12px; color: #c3c2b7">Calls</div>
+        <div style="font-size: 22px; font-weight: 620; letter-spacing: -0.01em; line-height: 1.2">53,410</div>
+        <div style="font-size: 12px; color: #8f8e85">in 84 sessions</div>
+      </div>
+      <div style="background: #1a1a19; border: 1px solid #33332f; border-radius: 10px; padding: 11px 13px 12px">
+        <div style="font-size: 12px; color: #c3c2b7">Tokens</div>
+        <div style="font-size: 22px; font-weight: 620; letter-spacing: -0.01em; line-height: 1.2">9.4B</div>
+        <div style="font-size: 12px; color: #8f8e85">peak 1.8B on Nov 17</div>
+      </div>
+      <div style="background: #1a1a19; border: 1px solid #33332f; border-radius: 10px; padding: 11px 13px 12px">
+        <div style="font-size: 12px; color: #c3c2b7">First-try edits</div>
+        <div style="font-size: 22px; font-weight: 620; letter-spacing: -0.01em; line-height: 1.2">78%</div>
+        <div style="font-size: 12px; color: #8f8e85"><span style="color: #0ca30c; font-weight: 600">Up 12</span> on the 30 days before</div>
+      </div>
+      <div style="background: #1a1a19; border: 1px solid #33332f; border-radius: 10px; padding: 11px 13px 12px">
+        <div style="font-size: 12px; color: #c3c2b7">Cache hit</div>
+        <div style="font-size: 22px; font-weight: 620; letter-spacing: -0.01em; line-height: 1.2">97%</div>
+        <div style="font-size: 12px; color: #8f8e85">same as the 30 days before</div>
+      </div>
+      <div style="background: #1a1a19; border: 1px solid #33332f; border-radius: 10px; padding: 11px 13px 12px; box-shadow: inset 3px 0 0 #fab219">
+        <div style="font-size: 12px; color: #c3c2b7">Corrections</div>
+        <div style="font-size: 22px; font-weight: 620; letter-spacing: -0.01em; line-height: 1.2">41</div>
+        <div style="font-size: 12px; color: #8f8e85"><span style="color: #fab219; font-weight: 600">Up 9</span> on the 30 days before</div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 10px">
+      <div style="background: #1a1a19; border: 1px solid #33332f; border-radius: 10px; padding: 11px 12px 8px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline">
+          <div><span style="font-size: 13px; font-weight: 600">Spend by day</span><span style="font-size: 12px; color: #8f8e85; margin-left: 8px">average $240.11, peak $913.17 on Nov 17</span></div>
+          <div style="display: flex; gap: 10px; font-size: 12px; color: #c3c2b7"><span style="display: flex; align-items: center; gap: 5px"><span style="width: 12px; height: 3px; border-radius: 2px; background: #3987e5"></span>Spend</span><span style="display: flex; align-items: center; gap: 5px"><span style="width: 12px; height: 0; border-top: 1.25px dashed #c3c2b7"></span>7-day average</span></div>
+        </div>
+        <svg role="img" aria-label="Line graph of spend by day over 30 days, with a dashed 7-day average" viewBox="0 0 600 190" style="display: block; width: 100%; height: auto; margin-top: 6px">
+          <line x1="40" y1="10" x2="600" y2="10" stroke="#2a2a27"></line>
+          <line x1="40" y1="90" x2="600" y2="90" stroke="#2a2a27"></line>
+          <line x1="40" y1="170" x2="600" y2="170" stroke="#2a2a27"></line>
+          <text x="34" y="14" text-anchor="end" font-size="11" fill="#8f8e85">$900</text>
+          <text x="34" y="94" text-anchor="end" font-size="11" fill="#8f8e85">$450</text>
+          <text x="34" y="174" text-anchor="end" font-size="11" fill="#8f8e85">$0</text>
+          <polyline points="42,140 61,152 80,165 99,165 118,120 137,104 156,168 175,168 194,160 213,166 232,145 251,168 270,168 289,168 308,130 327,150 346,80 365,160 384,155 403,165 422,160 441,150 460,10 479,90 498,120 517,100 536,135 555,120 574,170 596,138" fill="none" stroke="#3987e5" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></polyline>
+          <polyline points="42,150 99,155 156,150 213,158 270,160 327,150 384,140 441,130 498,95 555,115 596,128" fill="none" stroke="#c3c2b7" stroke-width="1.25" stroke-dasharray="3 3"></polyline>
+          <circle cx="460" cy="10" r="4" fill="#1a1a19"></circle><circle cx="460" cy="10" r="3" fill="#3987e5"></circle>
+          <text x="42" y="186" font-size="11" fill="#8f8e85">Oct 25</text>
+          <text x="300" y="186" font-size="11" fill="#8f8e85" text-anchor="middle">Nov 8</text>
+          <text x="596" y="186" font-size="11" fill="#8f8e85" text-anchor="end">Today</text>
+        </svg>
+      </div>
+
+      <div style="background: #1a1a19; border: 1px solid #33332f; border-radius: 10px; padding: 11px 12px 8px; display: flex; flex-direction: column; gap: 8px">
+        <div style="font-size: 13px; font-weight: 600">Running now <span style="font-size: 12px; font-weight: 400; color: #8f8e85; margin-left: 6px">2 sessions</span></div>
+        <div style="display: flex; gap: 10px; align-items: center; border-left: 3px solid #0ca30c; padding: 6px 10px; background: #232321; border-radius: 6px">
+          <div style="flex: 1; min-width: 0"><div style="font-size: 13px; font-weight: 550">Atlas, docs/style-guide</div><div style="font-size: 12px; color: #c3c2b7">Opus 5.5, running 4h 11m</div></div>
+          <div style="text-align: right"><div style="font-size: 15px; font-weight: 620">27%</div><div style="font-size: 12px; color: #8f8e85">734k left</div></div>
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center; border-left: 3px solid #fab219; padding: 6px 10px; background: #232321; border-radius: 6px">
+          <div style="flex: 1; min-width: 0"><div style="font-size: 13px; font-weight: 550">Beacon, feat/new-form</div><div style="font-size: 12px; color: #c3c2b7">Opus 5.5, running 1h 02m</div></div>
+          <div style="text-align: right"><div style="font-size: 15px; font-weight: 620; color: #fab219">74%</div><div style="font-size: 12px; color: #8f8e85">260k left</div></div>
+        </div>
+        <div style="font-size: 13px; font-weight: 600; margin-top: 6px">Coach tips</div>
+        <div style="display: flex; gap: 8px; align-items: baseline; border-left: 3px solid #fab219; padding: 4px 10px"><div><div style="font-size: 13px; font-weight: 550">The same failing command ran 4 times in Atlas.</div><div style="font-size: 12px; color: #c3c2b7">After two failures, stop and read the error.</div></div></div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1.15fr 1fr; gap: 10px">
+      <div style="background: #1a1a19; border: 1px solid #33332f; border-radius: 10px; padding: 11px 12px 6px">
+        <div style="font-size: 13px; font-weight: 600; margin-bottom: 6px">By activity</div>
+        <table style="width: 100%; border-collapse: collapse; font-size: 12.5px">
+          <thead>
+            <tr style="font-size: 11.5px; font-weight: 550; color: #8f8e85; text-align: right"><th style="text-align: left; font-weight: 550; padding: 4px 0">Activity</th><th style="font-weight: 550; color: #f0efec">Cost</th><th style="font-weight: 550">Turns</th><th style="font-weight: 550">First try</th><th style="font-weight: 550">Share</th></tr>
+          </thead>
+          <tbody>
+            <sc-for list="{{acts}}" as="a" hint-placeholder-count="8">
+              <tr style="border-top: 1px solid #2a2a27; text-align: right">
+                <td style="text-align: left; padding: 5px 0">{{a.name}}</td>
+                <td style="padding: 5px 0 0 0; width: 110px"><div>{{a.usd}}</div><div aria-hidden="true" style="height: 4px; border-radius: 2px; background: #2a2a27; margin-top: 3px"><div style="width: {{a.w}}; height: 4px; border-radius: 2px; background: linear-gradient(90deg, #3987e5, #c98500, #d03b3b); background-size: 110px 4px"></div></div></td>
+                <td style="color: #c3c2b7; width: 60px">{{a.turns}}</td>
+                <td style="color: #c3c2b7; width: 72px">{{a.ft}}</td>
+                <td style="color: #8f8e85; width: 56px">{{a.share}}</td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px">
+        <div style="background: #1a1a19; border: 1px solid #33332f; border-radius: 10px; padding: 11px 12px 6px">
+          <div style="font-size: 13px; font-weight: 600; margin-bottom: 6px">Projects</div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 12.5px">
+            <thead><tr style="font-size: 11.5px; color: #8f8e85; text-align: right"><th style="text-align: left; font-weight: 550; padding: 4px 0">Project</th><th style="font-weight: 550; color: #f0efec">Cost</th><th style="font-weight: 550">Sessions</th><th style="font-weight: 550">Share</th></tr></thead>
+            <tbody>
+              <tr style="border-top: 1px solid #2a2a27; text-align: right"><td style="text-align: left; padding: 5px 0">Atlas</td><td style="width: 110px; padding-top: 5px"><div>$4,201.30</div><div aria-hidden="true" style="height: 4px; border-radius: 2px; background: #2a2a27; margin-top: 3px"><div style="width: 100%; height: 4px; border-radius: 2px; background: linear-gradient(90deg, #3987e5, #c98500, #d03b3b); background-size: 110px 4px"></div></div></td><td style="color: #c3c2b7">52</td><td style="color: #8f8e85">58%</td></tr>
+              <tr style="border-top: 1px solid #2a2a27; text-align: right"><td style="text-align: left; padding: 5px 0">Beacon</td><td style="padding-top: 5px"><div>$1,880.12</div><div aria-hidden="true" style="height: 4px; border-radius: 2px; background: #2a2a27; margin-top: 3px"><div style="width: 45%; height: 4px; border-radius: 2px; background: linear-gradient(90deg, #3987e5, #c98500, #d03b3b); background-size: 110px 4px"></div></div></td><td style="color: #c3c2b7">18</td><td style="color: #8f8e85">26%</td></tr>
+              <tr style="border-top: 1px solid #2a2a27; text-align: right"><td style="text-align: left; padding: 5px 0">Plugins</td><td style="padding-top: 5px"><div>$1,122.02</div><div aria-hidden="true" style="height: 4px; border-radius: 2px; background: #2a2a27; margin-top: 3px"><div style="width: 27%; height: 4px; border-radius: 2px; background: linear-gradient(90deg, #3987e5, #c98500, #d03b3b); background-size: 110px 4px"></div></div></td><td style="color: #c3c2b7">14</td><td style="color: #8f8e85">16%</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="background: #1a1a19; border: 1px solid #33332f; border-radius: 10px; padding: 11px 12px 6px">
+          <div style="font-size: 13px; font-weight: 600; margin-bottom: 6px">MCP servers</div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 12.5px">
+            <thead><tr style="font-size: 11.5px; color: #8f8e85; text-align: right"><th style="text-align: left; font-weight: 550; padding: 4px 0">Server</th><th style="font-weight: 550; color: #f0efec">Calls</th><th style="font-weight: 550">Tools</th><th style="font-weight: 550">Errors</th></tr></thead>
+            <tbody>
+              <tr style="border-top: 1px solid #2a2a27; text-align: right"><td style="text-align: left; padding: 5px 0">Claude browser</td><td style="width: 90px; padding-top: 5px"><div>944</div><div aria-hidden="true" style="height: 4px; border-radius: 2px; background: #2a2a27; margin-top: 3px"><div style="width: 100%; height: 4px; border-radius: 2px; background: linear-gradient(90deg, #3987e5, #c98500, #d03b3b); background-size: 110px 4px"></div></div></td><td style="color: #c3c2b7">16</td><td style="color: #fab219">45</td></tr>
+              <tr style="border-top: 1px solid #2a2a27; text-align: right"><td style="text-align: left; padding: 5px 0">Zoho CRM</td><td style="padding-top: 5px"><div>131</div><div aria-hidden="true" style="height: 4px; border-radius: 2px; background: #2a2a27; margin-top: 3px"><div style="width: 14%; height: 4px; border-radius: 2px; background: linear-gradient(90deg, #3987e5, #c98500, #d03b3b); background-size: 110px 4px"></div></div></td><td style="color: #c3c2b7">9</td><td style="color: #fab219">2</td></tr>
+              <tr style="border-top: 1px solid #2a2a27; text-align: right"><td style="text-align: left; padding: 5px 0">Microsoft 365</td><td style="padding-top: 5px"><div>48</div><div aria-hidden="true" style="height: 4px; border-radius: 2px; background: #2a2a27; margin-top: 3px"><div style="width: 5%; height: 4px; border-radius: 2px; background: linear-gradient(90deg, #3987e5, #c98500, #d03b3b); background-size: 110px 4px"></div></div></td><td style="color: #c3c2b7">5</td><td style="color: #8f8e85">0</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      acts: [
+        { name: 'Delegation', usd: '$2,410.00', turns: '612', ft: '56%', share: '33%', w: '100%' },
+        { name: 'Feature Dev', usd: '$1,655.00', turns: '480', ft: '73%', share: '23%', w: '69%' },
+        { name: 'Coding', usd: '$1,120.00', turns: '1,840', ft: '88%', share: '16%', w: '46%' },
+        { name: 'Testing', usd: '$905.00', turns: '240', ft: '78%', share: '13%', w: '38%' },
+        { name: 'Debugging', usd: '$510.00', turns: '720', ft: '61%', share: '7%', w: '21%' },
+        { name: 'Exploration', usd: '$380.00', turns: '4,310', ft: 'No edits', share: '5%', w: '16%' },
+        { name: 'Refactoring', usd: '$130.00', turns: '96', ft: '83%', share: '2%', w: '5%' },
+        { name: 'Conversation', usd: '$93.44', turns: '9,120', ft: 'No edits', share: '1%', w: '4%' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

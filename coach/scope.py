@@ -25,6 +25,7 @@ import common as C  # noqa: E402
 import projects as PR  # noqa: E402
 
 REASONS = ("rule", "account", "unknown", "date")
+ACCOUNT_RULES = 2       # 2: 1.3.0 tags desktop sessions by the desktop app's account
 
 
 class Gate(object):
@@ -102,7 +103,9 @@ class Scope(object):
         are not reused, while a renamed project does not make them stale."""
         if not self.by_day:
             return ""
-        blob = json.dumps([self.only, self.unknown_out, self.dates],
+        # ACCOUNT_RULES changes when the way sessions are tagged with an account
+        # changes, so digests counted under the old tags are worked out again.
+        blob = json.dumps([self.only, self.unknown_out, self.dates, ACCOUNT_RULES],
                           sort_keys=True).lower().encode("utf-8")
         return hashlib.sha256(blob).hexdigest()[:16]
 

@@ -52,6 +52,18 @@ Older versions of Claude Code send fewer fields. The line then shows what it can
 
 The off switch for the nudge, `~/.claude/coach/off`, also silences the status line coaching: the line keeps `ctx` and `$` and drops the markers, reasons and actions.
 
+## Plan limits
+
+Claude Code hands status line scripts the plan limits it knows, in the `rate_limits` object of the input: `rate_limits.five_hour.used_percentage` and `rate_limits.seven_day.used_percentage` (0 to 100), each with `resets_at` (Unix epoch seconds). It sends them only to people on a claude.ai subscription, only after the first API response of a session, and each window can be missing on its own. The coach line does not print them. It keeps the two numbers of each window in `~/.claude/coach/state/limits.json`, with the time they were seen, for the live feed (`coach/live.py`) to read. The file is rewritten when a number changes, or once a minute.
+
+- Nothing is requested for this. The script reads what Claude Code already sent it; it never calls a usage endpoint and never reads the login token or the Keychain.
+- The limits are per account, shared by every Claude Code surface, so numbers seen in one terminal session also describe work done elsewhere. They are only as fresh as the last time a status line ran: the feed says when (`limits.as_of`).
+- The status line is part of the terminal interface. It is not run for sessions in the Claude desktop app's Code tab, so a day spent only there adds no limit numbers.
+- The feed works out pace from them: used percent less the share of the window that had passed when the numbers were seen. It says nothing about pace in the first 3 percent of a window, gives a time the limit runs out only when over pace, and drops a window once its reset time has passed.
+- `--json`, which the tests and the page use, keeps nothing.
+- Within one window the kept percentage never goes down, and a window that ends sooner than the one kept is ignored while the kept one is still running. This stops an idle session, redrawing numbers it got hours ago, from putting them back.
+- The numbers are not tagged with an account. On a Mac where two Claude accounts are used, the file can keep the higher account's numbers until that window resets.
+
 ## Settings a person can change
 
 In `~/.claude/coach/config.json`, under a `statusline` object. All are optional:

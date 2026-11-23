@@ -297,7 +297,7 @@ class TranscriptTest(unittest.TestCase):
     def cli(self, *args):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = compare.main(list(args) + ["--projects-dir", self.projects])
+            code = compare.main(list(args) + ["--projects-dir", self.projects], today=TODAY)
         return code, out.getvalue(), err.getvalue()
 
     def test_scheduled_and_coach_sessions_are_left_out(self):
@@ -465,7 +465,9 @@ class TranscriptTest(unittest.TestCase):
                           project="demo")
         self.assertEqual(self.cli("snapshot", "--label", "x", "last7", "--no-store")[0], 2)
         self.assertEqual(self.cli("snapshot", "--label", "pre-hooks", "last7", "--force")[0], 0)
-        self.assertEqual(compare.load_snapshot("pre-hooks")["counts"]["sessions"], 3)
+        forced = compare.load_snapshot("pre-hooks")
+        self.assertEqual((forced["first_day"], forced["last_day"]), ("2026-11-10", "2026-11-16"))
+        self.assertEqual(forced["counts"]["sessions"], 3)
         for bad in ("", "../x", "a/b", "x" * 41, ".hidden", "a b", "vs", "to"):
             self.assertRaises(compare.UsageError, compare.snapshot_name, bad)
         self.assertRaises(compare.UsageError, compare.load_snapshot, "nope")

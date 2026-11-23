@@ -261,6 +261,16 @@ class SiteTest(SiteBase):
         self.assertIn("<svg", page)
         self.assertIn("600k line", page)
         self.assertIn("Too few days to compare yet", page)
+        # every chart on Trends is a line graph in the Overview's style, none a bar chart
+        trends = page.split('id="view-trends"', 1)[1].split('id="view-progress"', 1)[0]
+        self.assertEqual(trends.count('<svg class="lg"'), len(build_site.SERIES))
+        self.assertEqual(trends.count('<figure class="chart trend">'), len(build_site.SERIES))
+        for gone in ('class="ch-bar', 'class="ch-zero"', '<svg class="ch"', "highlighted bar"):
+            self.assertNotIn(gone, trends)
+        # the 600k threshold is kept on the peak context graph, as a dashed line with its label
+        self.assertEqual(trends.count('class="lg-limit"'), 1)
+        self.assertEqual(trends.count('class="lg-limit-lab"'), 1)
+        self.assertIn("The ringed point is the latest day with data.", trends)
         before = os.stat(path).st_mtime_ns
         page2, _ = self.run_build()
         self.assertEqual(page, page2)
@@ -824,8 +834,10 @@ class NewSectionsTest(SiteBase):
             cache = json.load(fh)
         self.assertEqual(sum(d["sessions"] for d in cache["days"].values()), 1)
         self.assertNotIn("7a6b5c4d", json.dumps(cache))
+        # (the graphs' axis labels carry aria-hidden, which is markup, not a word on the page)
+        shown = self.body(page).split("evidence-slice")[0].replace('aria-hidden="true"', "").lower()
         for word in ("exclud", "omitted", "hidden", "not shown"):
-            self.assertNotIn(word, self.body(page).split("evidence-slice")[0].lower(), word)
+            self.assertNotIn(word, shown, word)
 
     def test_rules_reach_the_trend_scan_and_a_cache_made_before_them(self):
         self.add_old_reports_naming_hidden_work()
@@ -894,6 +906,712 @@ class NewSectionsTest(SiteBase):
         self.assertEqual(build_site.visible_totals(line, build_site.NO_HIDE), line)
         self.assertFalse(build_site.Hide([], []).on)
         self.assertTrue(build_site.Hide([], ["9f8e7d6c"]).text("see 9F8E7D6C here"))
+
+
+def live_period(label, unit, series, **over):
+    p = {"label": label, "cost_usd": 27.8, "prev_cost_usd": 145.3, "calls": 403, "sessions": 4,
+         "tokens": 57300000, "series_unit": unit, "series": series,
+         "peak": {"t": series[-1]["t"], "tokens": 14600000, "usd": 6.9},
+         "first_try": {"rate": 0.82, "prev_rate": 0.76, "edit_turns": 61},
+         "cache_hit": {"rate": 0.96, "prev_rate": 0.96},
+         "corrections": {"count": 3, "prev_count": 2},
+         "activities": [{"name": "Coding", "usd": 13.09, "share": 0.47, "first_try": 0.86, "turns": 40},
+                        {"name": "Conversation", "usd": 13.05, "share": 0.47, "first_try": None,
+                         "turns": 31},
+                        {"name": "Feature Dev", "usd": 0.92, "share": 0.03, "first_try": 0.5, "turns": 4},
+                        {"name": "Debugging", "usd": 0.5, "share": 0.02, "first_try": 1.0, "turns": 2},
+                        {"name": "Planning", "usd": 0.24, "share": 0.01, "first_try": None, "turns": 1}],
+         "projects": [{"name": "agentic-coach", "sessions": 2, "usd": 20.1, "share": 0.72},
+                      {"name": "Other", "sessions": 2, "usd": 7.7, "share": 0.28}],
+         "mcp_servers": [{"name": "zoho-crm", "calls": 41, "tools": 6, "errors": 2},
+                         {"name": "browser", "calls": 10, "tools": 3, "errors": 0}]}
+    p.update(over)
+    return p
+
+
+def live_feed():
+    """A full feed, as the contract for ~/.claude/coach/live.json lays it out."""
+    hours = [{"t": "2026-11-23T%02d:00:00+02:00" % i, "tokens": 1000 * i, "usd": v}
+             for i, v in enumerate([0.11, 0, 0.4, 2.1, 6.9, 5.74])]
+    days = [{"t": "2026-11-%02dT00:00:00+02:00" % d, "tokens": 1000000 * d, "usd": float(v)}
+            for d, v in zip(range(17, 24), [88, 131, 96, 1420.5, 120, 107.7, 27.8])]
+    return {
+        "version": 1, "updated": "2026-11-23T11:41:00+02:00", "page_url": None,
+        "periods": {"today": live_period("Today, Nov 23", "hour", hours),
+                    "week": live_period("Last 7 days", "day", days, cost_usd=1991.0),
+                    "month": live_period("Last 30 days", "day", days, cost_usd=7509.94)},
+        "limits": {"as_of": "2026-11-23T11:40:10+02:00", "rows": [
+            {"key": "five_hour", "label": "5-hour", "used_pct": 7,
+             "resets_at": "2026-11-23T14:24:00+02:00", "pace_pct": -39, "runs_out_at": None,
+             "level": "ok"},
+            {"key": "weekly", "label": "Weekly", "used_pct": 94,
+             "resets_at": "2026-11-26T05:41:00+02:00", "pace_pct": 33,
+             "runs_out_at": "2026-11-23T17:45:00+02:00", "level": "crit"}]},
+        "running": [{"project": "agentic-coach", "branch": "main", "model": "Fable 5.2",
+                     "started": "2026-11-23T10:29:00+02:00", "context_pct": 64,
+                     "context_left_tokens": 359000, "level": "warn"}],
+        "tips": [{"title": "agentic-coach, main has passed 600k of context.",
+                  "advice": "Compact or hand off before the next big step.",
+                  "pattern": "context_bloat"}],
+    }
+
+
+class FakeLive(object):
+    """Stands in for coach/live.py, which lives on another branch until the pool."""
+
+    def __init__(self, result):
+        self.result = result
+
+    def snapshot(self):
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+class OverviewTest(SiteBase):
+    def write_feed(self, feed):
+        write(os.path.join(self.tmp, "coach-home", "live.json"), json.dumps(feed))
+
+    def run_build(self, *extra):
+        """Build in this process with the feed taken from live.json: live.py, once it
+        is pooled in, would otherwise answer first with a feed of its own making."""
+        real = build_site.optional
+        old = dict((k, os.environ.get(k)) for k in ("COACH_HOME", "CLAUDE_CONFIG_DIR"))
+        os.environ["COACH_HOME"] = os.path.join(self.tmp, "coach-home")
+        os.environ["CLAUDE_CONFIG_DIR"] = os.path.join(self.tmp, "claude")
+        build_site.optional = lambda name: None if name == "live" else real(name)
+        try:
+            page, _card = build_site.build_page(self.reports, self.projects, "2026-11-17")
+        finally:
+            build_site.optional = real
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        return page, ""
+
+    def test_line_graph(self):
+        svg = build_site.line_svg([0, 5, 10, 2.5], ["a: $0", 'b "x" <b>', "c", "d"],
+                                  'Spend <by> "day"', mark=2)
+        self.assertTrue(svg.startswith('<svg class="lg" viewBox="0 0 1000 210" preserveAspectRatio="none"'))
+        self.assertIn('aria-label="Spend &lt;by&gt; &quot;day&quot;"', svg)
+        self.assertIn('tabindex="0"', svg)
+        # one scale: the top value sits on the top grid line, zero on the base line
+        self.assertIn('<polyline class="lg-line" points="4.0,200.0 334.7,108.0 665.3,16.0 996.0,154.0"/>', svg)
+        self.assertIn('<polygon class="lg-area" points="4.0,200.0 4.0,200.0 ', svg)
+        self.assertIn(' 996.0,154.0 996.0,200.0"/>', svg)
+        self.assertEqual(svg.count('class="lg-grid"'), 2)            # dashed, top and middle
+        self.assertEqual(svg.count('class="lg-base"'), 1)
+        self.assertEqual(svg.count('<g class="b"'), 4)               # a readout target per point
+        self.assertIn('data-r="b &quot;x&quot; &lt;b&gt;"', svg)
+        self.assertNotIn("<b>", svg)
+        # a ring on the last point and one on the marked point
+        self.assertIn('<path class="lg-ring" d="M996.0 154.0h0"/>', svg)
+        self.assertIn('<path class="lg-ring peak" d="M665.3 16.0h0"/>', svg)
+        self.assertEqual(svg.count("lg-hole"), 2)
+        # the marked point is the last one: one ring, the marked one
+        both = build_site.line_svg([1, 2, 4], mark=2)
+        self.assertEqual(both.count('class="lg-ring'), 1)
+        self.assertIn('class="lg-ring peak"', both)
+        # the small before-and-now line: no grid, no area, no targets, its own scale
+        small = build_site.line_svg([76, 82], title="t", size=(200, 40), grid=False, area=False,
+                                    hits=False, zero=False)
+        for gone in ("lg-grid", "lg-area", "<g ", "tabindex"):
+            self.assertNotIn(gone, small)
+        self.assertIn('points="4.0,33.0 196.0,7.0"', small)
+        flat = build_site.line_svg([5, 5], size=(200, 40), grid=False, hits=False, zero=False)
+        self.assertIn('points="4.0,20.0 196.0,20.0"', flat)
+        # one point: a ring and no line. No points, gaps and all zeros: still a drawing
+        one = build_site.line_svg([3], ["x"])
+        self.assertNotIn("polyline", one)
+        self.assertIn('d="M500.0 16.0h0"', one)
+        for values in ([], [None, None], [0, 0, 0], [None, 4, float("nan"), 2]):
+            got = build_site.line_svg(values, mark=7)
+            self.assertTrue(got.endswith("</svg>"), values)
+            self.assertNotIn("nan", got)
+        self.assertNotIn("tabindex", build_site.line_svg([]))
+        self.assertIn('points="4.0,200.0 500.0,200.0 996.0,200.0"', build_site.line_svg([0, 0, 0]))
+        self.assertEqual(build_site.fmt_usd2(7509.94), "$7,509.94")
+        self.assertEqual(build_site.fmt_usd2(None), "$0.00")
+        self.assertEqual(build_site.axis_marks(3), [0, 1, 2])
+        self.assertEqual(build_site.axis_marks(7), [0, 2, 4, 6])
+        self.assertEqual(build_site.axis_marks(30), [0, 7, 15, 22, 29])
+
+    def test_line_graph_ceiling_and_limit(self):
+        # a ceiling lifts the top of the scale; a limit is a dashed line on the same scale
+        svg = build_site.line_svg([0, 50], ceiling=200, limit=100)
+        self.assertIn('points="4.0,200.0 996.0,154.0"', svg)
+        self.assertIn('<line class="lg-limit" x1="0" y1="108.0" x2="1000" y2="108.0"/>', svg)
+        # a ceiling below the data does not cut it; a limit off the scale is not drawn
+        self.assertIn('points="4.0,200.0 996.0,16.0"', build_site.line_svg([0, 50], ceiling=10))
+        for odd in (None, -5, 900, float("nan"), "x", True):
+            self.assertNotIn("lg-limit", build_site.line_svg([0, 50], ceiling=200, limit=odd), odd)
+
+    def test_trend_graph(self):
+        days = ["2026-11-%02d" % i for i in range(1, 8)]
+        values = [None, 200000, 0, 450000, None, 700000, 520000]
+        html = build_site.trend_graph(days, values, "tok", "Peak context, tokens", 600000)
+        svg = html.split("<svg", 1)[1].split("</svg>", 1)[0]
+        self.assertIn('aria-label="Line graph of Peak context, tokens, last 7 days"', html)
+        # a line through the days with data, a readout target on each, a ring on the latest
+        self.assertIn('class="lg-line"', svg)
+        self.assertEqual(svg.count('<g class="b"'), 5)
+        self.assertIn('data-r="6 Nov: 700k"', svg)
+        self.assertIn('data-r="3 Nov: 0"', svg)
+        self.assertEqual(svg.count('class="lg-ring"'), 1)
+        self.assertNotIn("ch-bar", html)
+        # the scale is a round figure above the data and the threshold: 800k, 400k, 0
+        self.assertEqual(re.findall(r'<span style="top:[\d.]+%">([^<]+)</span>', html), ["800k", "400k", "0"])
+        # the threshold: a dashed line and its label at the same height (600k of 800k)
+        y = 200.0 - 184.0 * 600000 / 800000
+        self.assertIn('<line class="lg-limit" x1="0" y1="%.1f"' % y, svg)
+        self.assertIn('class="lg-limit-lab" aria-hidden="true" style="top:%.1f%%">600k line</span>'
+                      % (100.0 * y / 210.0), html)
+        # the first and last day under the graph
+        self.assertEqual(re.findall(r'<span style="left:[\d.]+%">([^<]+)</span>', html), ["1 Nov", "7 Nov"])
+        # no threshold: no dashed line; a small count keeps a scale of at least 4
+        plain = build_site.trend_graph(days, [0, 1, 0, 2, 1, 0, 1], "int", "Corrections")
+        self.assertNotIn("lg-limit", plain)
+        self.assertEqual(re.findall(r'<span style="top:[\d.]+%">([^<]+)</span>', plain), ["4", "2", "0"])
+        # no data at all still draws an empty graph
+        self.assertIn("</svg>", build_site.trend_graph(days, [None] * 7, "dec", "Active hours"))
+
+    def test_every_tab_shares_one_column(self):
+        page, _ = self.run_build()
+        css = page.split("<style", 1)[1].split("</style>", 1)[0]
+        # one width rule for the header and every tab: the Overview's 1320px column
+        self.assertIn(".wrap { max-width: 1320px; margin-inline: auto;", css)
+        self.assertNotIn("max-width: 980px", page)
+        self.assertNotIn("ov-on", page)
+        self.assertEqual(re.findall(r"\.wrap \{ max-width: (\d+)px", css), ["1320"])
+
+    def test_overview_tiles_fill_whole_rows(self):
+        page, _ = self.run_build()
+        css = page.split("<style", 1)[1].split("</style>", 1)[0]
+        # two columns on a phone, three from 600px, six (one row of figures) from 1180px
+        self.assertIn(".ov-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));", css)
+        self.assertIn("@media (min-width: 600px) {\n  .ov-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }", css)
+        self.assertIn("@media (min-width: 1180px) {\n  .ov-tiles { grid-template-columns: repeat(6, minmax(0, 1fr)); }", css)
+        self.assertNotIn("auto-fit, minmax(170px", css)
+        # the limits share the tiles' grid on a row of their own, spanning whole columns to fill it
+        self.assertEqual(page.count('h("div", { class: "ov-tiles" })'), 2)
+        self.assertEqual(page.count("limitRow("), 3)
+        self.assertIn(".ov-tiles.lims-2 .ov-lim { grid-column: span 3; }", css)
+        self.assertIn(".ov-tiles.lims-1 .ov-lim { grid-column: span 6; }", css)
+
+    def test_trend_scale_labels_are_exact(self):
+        top = build_site.scale_top
+        self.assertEqual(top(5, "int"), 8)            # 5 would label its middle 2
+        self.assertEqual(top(2, "int"), 4)            # a count scale is at least 4
+        self.assertEqual(top(25, "int"), 40)
+        self.assertEqual(top(700000, "tok"), 800000)
+        self.assertEqual(top(2200000, "tok"), 4000000)   # 2.5M would label its middle 1.2M
+        self.assertEqual(top(0, "pct"), 2)
+        self.assertEqual(top(85, "pct"), 100)
+        self.assertEqual(top(0, "dec"), 1)
+        self.assertEqual(top(14.3, "dec"), 20)
+        for kind in ("int", "tok", "pct", "dec"):
+            for v in (0, 0.3, 1, 3, 5, 7, 12, 25, 99, 140, 999, 2500, 61000, 660000, 1.3e6, 7.7e6):
+                t = top(v, kind)
+                self.assertGreaterEqual(t, v, (kind, v))
+                self.assertTrue(build_site._clean(t, kind) and build_site._clean(t / 2.0, kind), (kind, v, t))
+
+    def test_trend_line_from_the_measure_series(self):
+        feed = live_feed()
+        week = feed["periods"]["week"]
+        week["first_try"]["series"] = [0.7, None, 0.76, "x", 0.8, 0.82]
+        week["cache_hit"]["series"] = [None, 0.96, None]            # one step of data: not a line
+        week["corrections"]["series"] = list(range(20, 0, -1))      # more than 12 steps: cut to 12
+        view = build_site.live_view(feed)
+        got = view["periods"]["week"]
+        self.assertEqual(got["first_try"]["series"], [0.7, None, 0.76, None, 0.8, 0.82])
+        self.assertEqual(got["corrections"]["series"], list(range(20, 8, -1)))
+        self.assertIsNone(view["periods"]["today"]["first_try"]["series"])
+        graphs = build_site.overview_graphs(view)
+
+        def spark(period, m):
+            return graphs.split('<template id="ov-s-%s-%s">' % (period, m), 1)[1].split("</template>")[0]
+
+        ft = spark("week", "ft")
+        self.assertIn('aria-label="First-try edits over the period: from 70% to 82%"', ft)
+        # nulls are skipped and the points that remain keep their place along the line
+        self.assertIn('points="4.0,33.0 80.8,20.0 157.6,11.3 196.0,7.0"', ft)
+        self.assertIn('<path class="lg-ring" d="M196.0 7.0h0"/>', ft)
+        self.assertEqual(spark("week", "co").count(","), 12)
+        self.assertIn("Corrections over the period: from 20 to 9", spark("week", "co"))
+        # too little in the series, or no series: the two points, the period before and now
+        self.assertIn("Cache hit: 96% the period before, 96% now", spark("week", "ch"))
+        self.assertIn("First-try edits: 76% the period before, 82% now", spark("today", "ft"))
+        self.assertIn('points="4.0,33.0 196.0,7.0"', spark("today", "ft"))
+        # a series alone is enough: no figure for the period before is needed
+        week["first_try"].update(prev_rate=None)
+        self.assertIn("from 70% to 82%", build_site.overview_graphs(build_site.live_view(feed)))
+        for odd in ("soon", {"a": 1}, [], [None], ["a", "b"], [5]):
+            week["first_try"] = {"rate": None, "prev_rate": None, "series": odd}
+            self.assertNotIn("ov-s-week-ft", build_site.overview_graphs(build_site.live_view(feed)), odd)
+
+    def test_heat_bar_width(self):
+        heat = build_site.heat_pct
+        self.assertEqual(heat(50, 50), 100)              # the largest row fills the track
+        self.assertEqual(heat(25, 50), 50)
+        self.assertEqual(heat(1, 3), 33)
+        self.assertEqual(heat(0.01, 500), 2)             # anything at all keeps a sliver
+        self.assertEqual(heat(80, 50), 100)              # never past the track
+        for value, top in ((0, 50), (-3, 50), (None, 50), (5, 0), (5, None), ("5", 50),
+                           (float("nan"), 50), (True, 50)):
+            self.assertEqual(heat(value, top), 0, (value, top))
+        rows = build_site.add_heat([{"usd": 20.0}, {"usd": 5.0}, {"usd": None}, {"usd": 0}], "usd")
+        self.assertEqual([r["heat"] for r in rows], [100, 25, 0, 0])
+        self.assertEqual(build_site.add_heat([], "usd"), [])
+        self.assertEqual(build_site.add_heat([{"usd": None}], "usd")[0]["heat"], 0)
+
+    def test_full_feed_is_embedded_and_drawn(self):
+        feed = live_feed()
+        feed["tips"][0]["title"] = "Tip " + EVIL
+        feed["periods"]["today"]["projects"][0]["name"] = "proj " + EVIL
+        self.write_feed(feed)
+        self.add_reports()
+        page, _out = self.run_build()
+        self.check_contract(page)
+        self.assertNotIn("<script>alert(1)", page)
+        self.assertNotIn('"onload=alert(2)>', page)
+        # Overview is the first tab, with its own address, and the others are still there
+        tabs = re.findall(r'<a href="#(\w+)" id="tab-(\w+)">', page)
+        self.assertEqual([t[0] for t in tabs], ["overview", "today", "week", "cost", "trends",
+                                                "progress", "setup", "baseline"])
+        self.assertIn('<section class="view" id="view-overview" aria-labelledby="tab-overview">', page)
+        for label in (">Today</button>", ">7 days</button>", ">30 days</button>"):
+            self.assertIn(label, page)
+        live = self.page_data(page)["live"]
+        self.assertEqual(live["version"], 1)
+        self.assertEqual(live["updated"], "2026-11-23T11:41:00+02:00")
+        self.assertEqual(sorted(live["periods"]), ["month", "today", "week"])
+        today = live["periods"]["today"]
+        self.assertEqual(today["label"], "Today, Nov 23")
+        self.assertEqual((today["cost_usd"], today["prev_cost_usd"], today["calls"]), (27.8, 145.3, 403))
+        self.assertEqual(today["series_unit"], "hour")
+        self.assertEqual(len(today["series"]), 6)
+        self.assertEqual(today["first_try"], {"rate": 0.82, "prev_rate": 0.76, "edit_turns": 61,
+                                              "series": None})
+        # every activity is listed, each with its turns and its heat bar length
+        self.assertEqual([a["name"] for a in today["activities"]],
+                         ["Coding", "Conversation", "Feature Dev", "Debugging", "Planning"])
+        self.assertEqual([a["heat"] for a in today["activities"]], [100, 100, 7, 4, 2])
+        self.assertEqual(today["activities"][0]["turns"], 40)
+        self.assertIsNone(today["activities"][1]["first_try"])
+        self.assertEqual([p["heat"] for p in today["projects"]], [100, 38])
+        self.assertEqual(today["mcp_servers"], [
+            {"name": "zoho-crm", "calls": 41, "tools": 6, "errors": 2, "heat": 100},
+            {"name": "browser", "calls": 10, "tools": 3, "errors": 0, "heat": 24}])
+        self.assertEqual(live["periods"]["week"]["series_unit"], "day")
+        self.assertEqual(live["limits"]["as_of"], "2026-11-23T11:40:10+02:00")
+        self.assertEqual([r["key"] for r in live["limits"]["rows"]], ["five_hour", "weekly"])
+        self.assertEqual(live["limits"]["rows"][1]["runs_out_at"], "2026-11-23T17:45:00+02:00")
+        self.assertEqual(live["running"][0]["context_left_tokens"], 359000)
+        self.assertEqual(live["tips"][0]["advice"], "Compact or hand off before the next big step.")
+        self.assertNotIn("page_url", live)
+        # the graphs: spend for each period, the hour as the unit for today, the peak marked
+        for key in ("today", "week", "month"):
+            self.assertEqual(page.count('<template id="ov-g-%s">' % key), 1)
+            for m in ("ft", "ch", "co"):
+                self.assertEqual(page.count('<template id="ov-s-%s-%s">' % (key, m)), 1)
+        self.assertIn('aria-label="Line graph of spend by hour, Today, Nov 23, peaking at 04:00"', page)
+        self.assertIn('aria-label="Line graph of spend by day, Last 7 days, peaking on Nov 20"', page)
+        self.assertIn('data-r="Nov 20: $1,420.50"', page)
+        self.assertIn('data-r="04:00: $6.90"', page)
+        self.assertEqual(page.count("lg-ring peak"), 3)
+        self.assertIn('<span style="left:99.6%">Today</span>', page)
+        self.assertIn('aria-label="First-try edits: 76% the period before, 82% now"', page)
+        self.assertIn('aria-label="Corrections: 2 the period before, 3 now"', page)
+        # the words the script prints (they are in the page with or without a feed)
+        for said in ("API-equivalent, not a bill", "Limit used, ", "Spend by hour", "Spend by day",
+                     "Spend by week", "Spend today", "Calls", "Tokens", "First-try edits", "Cache hit",
+                     "Corrections", "Coach tips", "By activity", "Projects", "MCP servers", "Running now",
+                     "7-day average", "No MCP calls in this period", "Update the coach"):
+            self.assertIn(said, page)
+        # the restyled page: system fonts only (no web font is asked for), sentence case,
+        # the dashboard's colours in light and dark, tabs and periods as one kind of control
+        self.assertNotIn("fonts.googleapis", page)
+        self.assertNotIn("IBM Plex", page)
+        self.assertNotIn("text-transform: uppercase; letter-spacing", page)
+        self.assertIn('--sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;', page)
+        self.assertIn("font-variant-numeric: tabular-nums", page)
+        self.assertIn("--bg: #f3f2ee; --surface: #fcfcfb;", page)          # light
+        self.assertEqual(page.count("--bg: #111110; --surface: #1a1a19;"), 2)   # dark, by setting and by choice
+        self.assertIn('.tabs a[aria-current="page"] { background: var(--pill); color: var(--pill-text); }', page)
+        self.assertIn('.seg button[aria-pressed="true"] { background: var(--pill); color: var(--pill-text); }', page)
+        self.assertIn(".brand h1 { font-size: 17px; font-weight: 650; }", page)
+        self.assertIn(".ov-card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px;", page)
+        self.assertIn(".hb { width: 110px; height: 4px;", page)
+        # the figure a screen reader hears is rounded as the page rounds it
+        feed["periods"]["today"]["first_try"] = {"rate": 0.825, "prev_rate": 0.765}
+        self.assertIn("First-try edits: 77% the period before, 83% now",
+                      build_site.overview_graphs(build_site.live_view(feed)))
+
+    def test_minimal_feed_with_nulls_and_no_limits(self):
+        feed = {"version": 1, "updated": "2026-11-23T11:41:00+02:00", "page_url": None,
+                "periods": {"today": {
+                    "label": "Today, Nov 23", "cost_usd": 0.42, "prev_cost_usd": None, "calls": 3,
+                    "sessions": 1, "tokens": 120000, "series_unit": "hour",
+                    "series": [{"t": "2026-11-23T11:00:00+02:00", "tokens": 120000, "usd": 0.42}],
+                    "peak": None,
+                    "first_try": {"rate": None, "prev_rate": None, "edit_turns": 0},
+                    "cache_hit": {"rate": 0.5, "prev_rate": None},
+                    "corrections": {"count": 0, "prev_count": None},
+                    "activities": [{"name": "Conversation", "usd": 0.42, "share": 1.0,
+                                    "first_try": None}],
+                    "projects": [], "mcp_servers": []}},
+                "limits": {"as_of": None, "rows": []}, "running": [], "tips": []}
+        self.write_feed(feed)
+        page, _out = self.run_build()
+        self.check_contract(page)
+        live = self.page_data(page)["live"]
+        self.assertEqual(sorted(live["periods"]), ["today"])       # a missing period is just absent
+        today = live["periods"]["today"]
+        self.assertIsNone(today["prev_cost_usd"])
+        self.assertIsNone(today["peak"])
+        self.assertEqual(today["first_try"], {"rate": None, "prev_rate": None, "edit_turns": 0,
+                                              "series": None})
+        self.assertEqual(today["cache_hit"], {"rate": 0.5, "prev_rate": None, "series": None})
+        self.assertEqual(today["corrections"], {"count": 0, "prev_count": None, "series": None})
+        self.assertEqual(today["activities"], [{"name": "Conversation", "usd": 0.42, "turns": None,
+                                                "share": 1.0, "first_try": None, "heat": 100}])
+        self.assertEqual((today["projects"], today["mcp_servers"]), ([], []))
+        self.assertEqual(live["limits"], {"as_of": None, "rows": []})
+        self.assertEqual((live["running"], live["tips"]), ([], []))
+        self.assertEqual(page.count('<template id="ov-g-today">'), 1)
+        self.assertNotIn('<template id="ov-s-', page)              # nothing before to draw a line from
+        self.assertNotIn("ov-g-week", page.split("<script>")[0])
+        # keys left out, and values of the wrong kind, are tolerated the same way
+        for odd in ({}, {"version": 1}, {"version": "1", "periods": [], "limits": "x", "running": {},
+                                         "tips": None, "updated": 7},
+                    {"periods": {"today": {"series": [1, {"t": "soon"}, {"t": None}],
+                                           "activities": "none", "first_try": 3,
+                                           "cost_usd": float("inf")}},
+                     "limits": {"rows": [{"label": "5-hour"}, {"used_pct": 95}, 4]},
+                     "running": [{"branch": "main"}, {"project": "p", "started": "yesterday"}],
+                     "tips": [{"advice": "a"}, "t"]}):
+            view = build_site.live_view(odd)
+            self.assertEqual(view["version"], 1)
+            json.dumps(view, allow_nan=False)
+            self.assertIsInstance(build_site.overview_graphs(view), str)
+        view = build_site.live_view(odd)
+        self.assertEqual(view["periods"]["today"]["series"], [])
+        self.assertIsNone(view["periods"]["today"]["cost_usd"])
+        self.assertEqual(view["periods"]["today"]["label"], "Today")
+        self.assertEqual(view["limits"]["rows"], [
+            {"key": "", "label": "Limit", "used_pct": 95, "resets_at": None, "pace_pct": None,
+             "runs_out_at": None, "level": "crit"}])
+        self.assertEqual([r["project"] for r in view["running"]], ["p"])
+        self.assertIsNone(view["running"][0]["started"])
+        self.assertEqual(view["tips"], [])
+        # a number no float can hold is no number, and the rest of the feed still shows
+        huge = live_feed()
+        huge["periods"]["today"]["cost_usd"] = 10 ** 400
+        huge["periods"]["today"]["calls"] = 10 ** 400
+        view = build_site.live_view(huge)
+        self.assertIsNone(view["periods"]["today"]["cost_usd"])
+        self.assertEqual(len(view["periods"]), 3)
+
+    def test_no_feed_leaves_an_empty_overview(self):
+        page, _out = self.run_build()
+        self.check_contract(page)
+        self.assertIsNone(self.page_data(page)["live"])
+        self.assertIn('id="tab-overview"', page)
+        self.assertIn('<p class="empty-title">No live numbers yet.</p>', page)
+        self.assertNotIn('<template id="ov-', page)
+        # the script opens on Today then, as it did before there was an Overview
+        self.assertIn('v = liveOk ? "overview" : "today";', page)
+        # a file that is not a feed is no feed
+        for text in ("{broken", "[1, 2]", '"live"'):
+            write(os.path.join(self.tmp, "coach-home", "live.json"), text)
+            page, _out = self.run_build()
+            self.assertIsNone(self.page_data(page)["live"], text)
+
+    def all_time(self, **over):
+        """A feed with an All time period of 12 weekly points, Sep 7 to Nov 23."""
+        import datetime
+        feed = live_feed()
+        mondays = [(datetime.date(2026, 9, 7) + datetime.timedelta(days=7 * i)).isoformat() for i in range(12)]
+        weeks = [{"t": d + "T00:00:00+02:00", "tokens": 1000000, "usd": float(10 + i)}
+                 for i, d in enumerate(mondays)]
+        weeks[3]["usd"] = 900.5
+        p = live_period("All time, since Sep 9", "week", weeks, cost_usd=10811.0, prev_cost_usd=None,
+                        since="2026-09-09T00:00:00+02:00", detail_since="2026-11-09T00:00:00+02:00")
+        p["first_try"]["prev_rate"] = p["cache_hit"]["prev_rate"] = p["corrections"]["prev_count"] = None
+        p.update(over)
+        feed["periods"]["all"] = p
+        return feed
+
+    def test_all_time_is_the_fourth_period(self):
+        view = build_site.live_view(self.all_time())
+        self.assertEqual(sorted(view["periods"]), ["all", "month", "today", "week"])
+        a = view["periods"]["all"]
+        self.assertEqual((a["label"], a["series_unit"], len(a["series"])), ("All time, since Sep 9", "week", 12))
+        self.assertIsNone(a["prev_cost_usd"])
+        self.assertEqual(a["detail_from"], "Nov 9")
+        self.write_feed(self.all_time())
+        page, _ = self.run_build()
+        self.assertIn('<button type="button" id="ov-p-all" aria-pressed="false">All time</button>', page)
+        self.assertIn('var PERIODS = ["today", "week", "month", "all"]', page)
+        self.assertEqual(page.count('<template id="ov-g-all">'), 1)
+        self.assertIn('"Detail from " + p.detail_from', page)
+        self.assertIn("#overview/all", page)
+        # no period before: nothing to draw a before-and-now line from
+        for m in ("ft", "ch", "co"):
+            self.assertNotIn('<template id="ov-s-all-%s">' % m, page)
+
+    def test_detail_line_only_when_the_detail_starts_later(self):
+        def note(**over):
+            return build_site.live_view(self.all_time(**over))["periods"]["all"]["detail_from"]
+        self.assertEqual(note(), "Nov 9")
+        self.assertIsNone(note(detail_since="2026-09-09T00:00:00+02:00"))     # the whole period has detail
+        self.assertIsNone(note(detail_since="2026-09-09T09:30:00+02:00"))     # the same day counts as the start
+        self.assertIsNone(note(detail_since=None))
+        self.assertIsNone(note(since=None))
+        self.assertIsNone(note(detail_since="soon"))
+        self.assertIsNone(note(detail_since="2026-08-01T00:00:00+02:00"))     # earlier than the start: nothing to say
+        # the other periods carry no such line
+        self.assertIsNone(build_site.live_view(self.all_time())["periods"]["month"]["detail_from"])
+
+    def test_weekly_points_read_like_days_under_the_graph(self):
+        graphs = build_site.overview_graphs(build_site.live_view(self.all_time()))
+        g = graphs.split('<template id="ov-g-all">', 1)[1].split("</template>")[0]
+        self.assertIn('aria-label="Line graph of spend by week, All time, since Sep 9, peaking in the week of Sep 28"', g)
+        self.assertIn('data-r="Week of Sep 28: $900.50"', g)
+        axis = re.findall(r'<span style="left:[0-9.]+%">([^<]+)</span>', g)
+        self.assertEqual(axis[0], "Sep 7")
+        self.assertEqual(axis[-1], "Today")                # the last week is the one today is in
+        self.assertNotIn("Week of", "".join(axis))
+        # a last week that starts after the feed was written is not called Today
+        late = self.all_time()
+        late["updated"] = "2026-11-20T11:41:00+02:00"
+        g = build_site.overview_graphs(build_site.live_view(late)).split('<template id="ov-g-all">', 1)[1]
+        self.assertIn(">Nov 23</span>", g.split("</template>")[0])
+
+    def test_a_long_all_time_graph_keeps_its_points(self):
+        import datetime
+        weeks = [{"t": (datetime.date(2024, 1, 1) + datetime.timedelta(days=7 * i)).isoformat() + "T00:00:00+02:00",
+                  "tokens": 5, "usd": 1.0} for i in range(151)]
+        a = build_site.live_view(self.all_time(series=weeks))["periods"]["all"]
+        self.assertEqual(len(a["series"]), 151)
+        self.assertEqual(build_site.live_period({"series_unit": "fortnight"}, "x")["series_unit"], "day")
+
+    def test_spend_graph_average_line_and_money_scale(self):
+        self.assertEqual(build_site.running_average([7, 7, 7]), [7.0, 7.0, 7.0])
+        self.assertEqual(build_site.running_average([0, 14]), [0.0, 7.0])
+        # each point: the mean of it and up to six before it
+        self.assertEqual(build_site.running_average(list(range(1, 10)))[-1], 6.0)        # 3..9
+        self.assertEqual(build_site.running_average([10, 20, 30], span=2), [10.0, 15.0, 25.0])
+        self.assertEqual(build_site.running_average([]), [])
+        self.assertEqual([build_site.axis_usd(v) for v in (0, 4.5, 12.4, 450, 999.6, 1000, 1240, 9960, 12400, None)],
+                         ["$0", "$4.50", "$12", "$450", "$1000", "$1k", "$1.2k", "$10.0k".replace(".0k", "k"), "$12k", "$0"])
+        # the average is a dashed line on the graph's own scale, and no target or ring of its own
+        svg = build_site.line_svg([0, 10, 20], avg=[0, 5, 10])
+        self.assertIn('<polyline class="lg-avg" points="4.0,200.0 500.0,154.0 996.0,108.0"/>', svg)
+        self.assertEqual(svg.count("<g class="), 3)
+        self.assertNotIn("lg-avg", build_site.line_svg([0, 10, 20]))
+        self.assertNotIn("lg-avg", build_site.line_svg([0, 10, 20], avg=[None, 5, None]))   # one point is no line
+
+        feed = live_feed()
+        days = [{"t": "2026-11-%02dT00:00:00+02:00" % d, "tokens": 1, "usd": float(v)}
+                for d, v in zip(range(14, 24), [10, 20, 30, 40, 50, 60, 70, 80, 900, 100])]
+        feed["periods"]["month"] = live_period("Last 30 days", "day", days)
+        graphs = build_site.overview_graphs(build_site.live_view(feed))
+
+        def graph(key):
+            return graphs.split('<template id="ov-g-%s">' % key, 1)[1].split("</template>")[0]
+        month = graph("month")
+        self.assertIn("lg-avg", month)                      # by day and more than a week of days
+        self.assertIn(", with a dashed 7-day average", month)
+        self.assertNotIn("lg-avg", graph("week"))          # seven days: nothing to average over
+        self.assertNotIn("lg-avg", graph("today"))         # by hour
+        # the scale: the top line is the highest point, the middle half of it, the base $0
+        self.assertIn('<div class="lg-y" aria-hidden="true"><span style="top:7.6%">$900</span>'
+                      '<span style="top:51.4%">$450</span><span style="top:95.2%">$0</span></div>', month)
+        self.assertIn('<span style="top:7.6%">$6.90</span>', graph("today"))
+        weekly = build_site.overview_graphs(build_site.live_view(self.all_time()))
+        self.assertNotIn("lg-avg", weekly.split('<template id="ov-g-all">', 1)[1].split("</template>")[0])
+
+    def run_script(self, feed, now):
+        """Build the page from the feed and run its own script (tests/page_dom.js, under node):
+        the live line, and for each period the Overview's class and its text as a tree."""
+        self.write_feed(feed)
+        page, _ = self.run_build()
+        path = os.path.join(self.tmp, "page.html")
+        write(path, page)
+        done = subprocess.run([shutil.which("node"), os.path.join(ROOT, "tests", "page_dom.js"), path, now],
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr[-2000:])
+        return json.loads(done.stdout)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed: the page's script is not run")
+    def test_the_page_script_draws_every_period(self):
+        got = self.run_script(self.all_time(), "2026-11-23T11:43:00+02:00")
+        self.assertEqual(got["live"], "conn on | Live · updated 11:41:00")
+        for key, p in got["periods"].items():
+            self.assertEqual((key, p["cls"], p["pressed"]), (key, "ov", "true"))
+            tree = p["tree"]
+            self.assertNotIn("Update the coach", tree, key)         # what a script error would leave
+            for said in ("div.ov-tiles", "div.ov-row2", "div.ov-row3", '"API-equivalent, not a bill"',
+                         '"Calls"', '"Tokens"', '"First-try edits"', '"Cache hit"', '"Corrections"',
+                         '"Limit used, 5-hour"', '"Limit used, Weekly, near limit"', '"Running now"',
+                         '"agentic-coach, main"', '"64% context"', '"Coach tips"', '"By activity"',
+                         '"Projects"', '"MCP servers"', '"Activity"', '"Project"', '"Server"', "div.hb"):
+                self.assertIn(said, tree, (key, said))
+            # the two limits tell the tiles' grid their count, so they span and fill their row
+            self.assertIn("div.ov-tiles.lims-2", tree, key)
+        today, week, all_time =(got["periods"][k]["tree"] for k in ("today", "week", "all"))
+        self.assertIn('"Spend today"', today)
+        self.assertIn('"$27.80"', today)
+        self.assertIn('"Spend by hour"', today)
+        self.assertIn('b.is-good "Up 6"', today)                    # first-try: up is good
+        self.assertIn('" on yesterday"', today)
+        self.assertIn('"same as yesterday"', today)                 # cache hit did not move
+        self.assertIn("section.ov-card.ov-tile.ov-how.warning", today)   # corrections went up
+        self.assertIn('b.is-warn "Up 1"', today)
+        self.assertIn('"Spend, last 7 days"', week)
+        self.assertIn('"Spend by day"', week)
+        self.assertNotIn("7-day average", week)                     # seven days: no average line
+        # All time: its own label, a point a week, where the detail starts, and no change lines
+        self.assertIn('"Spend, all time, since Sep 9"', all_time)
+        self.assertIn('"Spend by week"', all_time)
+        self.assertIn("in the week of Sep 28", all_time)
+        self.assertEqual(all_time.count('"Detail from Nov 9"'), 6)   # calls, three figures, two tables
+        for word in ("Up ", "Down ", "same as", " on the ", "yesterday"):
+            self.assertNotIn(word, all_time, word)
+        self.assertNotIn("Detail from", today)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed: the page's script is not run")
+    def test_the_page_script_with_an_old_or_thin_feed(self):
+        # over 15 minutes old: an orange dot and the words say so
+        got = self.run_script(live_feed(), "2026-11-23T14:00:00+02:00")
+        self.assertEqual(got["live"], "conn on stale | Not live · updated Nov 23 at 11:41")
+        self.assertEqual(self.run_script(live_feed(), "2026-11-23T11:56:00+02:00")["live"].split(" | ")[0], "conn on")
+        # a feed without All time: that period says so, and the limits and what is running still show
+        thin = got["periods"]["all"]["tree"]
+        self.assertIn('"No data for this period."', thin)
+        self.assertIn('"Limit used, 5-hour"', thin)
+        self.assertIn("div.ov-tiles.lims-2", thin)
+        self.assertIn('"Running now"', thin)
+        self.assertNotIn("div.ov-row3", thin)
+        # a feed with nothing but a period: no limits, nothing running, no tips, empty tables
+        bare = live_feed()
+        bare.update(limits={"as_of": None, "rows": []}, running=[], tips=[])
+        bare["periods"]["today"].update(activities=[], projects=[], mcp_servers=[], series=[], peak=None)
+        tree = self.run_script(bare, "2026-11-23T11:43:00+02:00")["periods"]["today"]["tree"]
+        self.assertNotIn("Update the coach", tree)
+        for said in ('"Nothing is running."', '"No tips right now."', '"No activity in this period"',
+                     '"No projects in this period"', '"No MCP calls in this period"',
+                     '"No spend recorded in this period."'):
+            self.assertIn(said, tree, said)
+        self.assertNotIn("Limit used", tree)
+        self.assertNotIn("lims-", tree)
+
+    def test_a_newer_feed_asks_for_an_update(self):
+        self.write_feed(dict(live_feed(), version=2))
+        page, _out = self.run_build()
+        self.check_contract(page)
+        self.assertEqual(self.page_data(page)["live"], {"version": 2})
+        self.assertNotIn('<template id="ov-', page)
+        self.assertNotIn("agentic-coach, main", page)
+        # anything above 1 is newer, however it is written; 1 is this version
+        self.assertEqual(build_site.live_view(dict(live_feed(), version=1.5)), {"version": 1.5})
+        self.assertEqual(build_site.live_view(dict(live_feed(), version="2")), {"version": 2.0})
+        for newer, shown in (("2.0.0", 2.0), ("v3", 3.0), (float("inf"), 2), (10 ** 400, 2), (1e16, 2)):
+            self.assertEqual(build_site.live_view(dict(live_feed(), version=newer)),
+                             {"version": shown}, newer)
+        for same in (1, 1.0, "1", "1.0", None, "one", 0, True, [2]):
+            self.assertEqual(len(build_site.live_view(dict(live_feed(), version=same))["periods"]), 3)
+
+    def test_feed_comes_from_the_module_first_then_the_file(self):
+        home = os.path.join(self.tmp, "coach-home")
+        self.write_feed({"version": 1, "updated": "2026-11-23T09:00:00+02:00",
+                         "periods": {"today": {"sessions": 1}}})
+        real, env = build_site.optional, os.environ.get("COACH_HOME")
+        os.environ["COACH_HOME"] = home
+        try:
+            def with_live(mod):
+                build_site.optional = lambda name: mod if name == "live" else real(name)
+                return build_site.load_live()
+
+            snap = {"version": 1, "updated": "2026-11-23T11:41:00+02:00",
+                    "periods": {"today": {"sessions": 1}}}
+            self.assertEqual(with_live(FakeLive(snap)), snap)                # the module wins
+            for bad in (FakeLive(RuntimeError("boom")), FakeLive(None), FakeLive([1]), object(), None):
+                # it raises, hands back no feed, has no snapshot(), or is not there: the file
+                self.assertEqual(with_live(bad)["updated"], "2026-11-23T09:00:00+02:00", bad)
+            os.remove(os.path.join(home, "live.json"))
+            self.assertIsNone(with_live(None))                               # neither: no feed
+            self.assertIsNone(with_live(FakeLive(RuntimeError("boom"))))
+            self.assertEqual(with_live(FakeLive(snap)), snap)
+        finally:
+            build_site.optional = real
+            if env is None:
+                del os.environ["COACH_HOME"]
+            else:
+                os.environ["COACH_HOME"] = env
+
+    def test_feed_that_names_excluded_work(self):
+        feed = live_feed()
+        feed["periods"]["week"]["projects"][0]["name"] = "quagga-app"
+        feed["running"].append({"project": "Quagga", "branch": "main"})
+        feed["tips"].append({"title": "quagga ran long.", "advice": "Stop."})
+        view = build_site.live_view(feed, build_site.Hide([{"match": ["quagga"]}]))
+        self.assertEqual(sorted(view["periods"]), ["month", "today"])    # counted with it: left out
+        self.assertEqual([r["project"] for r in view["running"]], ["agentic-coach"])
+        self.assertEqual(len(view["tips"]), 1)
+        self.assertNotIn("quagga", json.dumps(view).lower())
+        self.assertNotIn("quagga", build_site.overview_graphs(view).lower())
+        self.assertEqual(len(build_site.live_view(feed)["periods"]), 3)
+        # the rules reach the page through the build, from config.json
+        self.write_feed(feed)
+        write(os.path.join(self.tmp, "coach-home", "config.json"),
+              json.dumps({"exclude": [{"match": ["quagga"]}]}))
+        page, _out = self.run_build()
+        self.assertNotIn("quagga", page.lower())
+        live = self.page_data(page)["live"]
+        self.assertEqual(sorted(live["periods"]), ["month", "today"])
+        self.assertEqual(len(live["running"]), 1)
+        # a rule is matched against names only: the feed's own words, an activity
+        # type or a server that happens to hold the rule's text hide nothing
+        for word in ("zoho", "session", "tool", "cod", "plan", "debug", "today", "last 7", "label",
+                     "other"):
+            view = build_site.live_view(live_feed(), build_site.Hide([{"match": [word]}]))
+            self.assertEqual(len(view["periods"]), 3, word)
+            self.assertEqual((len(view["running"]), len(view["tips"])), (1, 1), word)
+        view = build_site.live_view(live_feed(), build_site.Hide([{"match": ["agentic"]}]))
+        self.assertEqual((view["periods"], view["running"], view["tips"]), ({}, [], []))
+        # an MCP server is named by the person: its row goes, the others are measured again
+        view = build_site.live_view(live_feed(), build_site.Hide([{"match": ["zoho"]}]))
+        self.assertEqual(view["periods"]["today"]["mcp_servers"], [
+            {"name": "browser", "calls": 10, "tools": 3, "errors": 0, "heat": 100}])
+
+
+class EmptyFeedTest(unittest.TestCase):
+    """A feed with nothing in it (fresh install, 30 quiet days) counts as no feed."""
+
+    def feed(self, **over):
+        quiet = {"sessions": 0, "cost_usd": 0}
+        base = {"version": 1, "periods": {"today": dict(quiet), "week": dict(quiet), "month": dict(quiet)},
+                "limits": {"as_of": None, "rows": []}, "running": []}
+        base.update(over)
+        return base
+
+    def test_rule(self):
+        self.assertTrue(build_site.feed_is_empty(self.feed()))
+        self.assertTrue(build_site.feed_is_empty(self.feed(periods={})))
+        busy = self.feed()
+        busy["periods"]["month"]["sessions"] = 1
+        self.assertFalse(build_site.feed_is_empty(busy))
+        spent = self.feed()
+        spent["periods"]["week"]["cost_usd"] = 0.01
+        self.assertFalse(build_site.feed_is_empty(spent))
+        self.assertFalse(build_site.feed_is_empty(self.feed(limits={"rows": [{"key": "weekly"}]})))
+        self.assertFalse(build_site.feed_is_empty(self.feed(running=[{"project": "x"}])))
+        for newer in (2, 1.5, "2", None):           # never hide "Update the coach"
+            self.assertFalse(build_site.feed_is_empty(self.feed(version=newer)), newer)
 
 
 if __name__ == "__main__":

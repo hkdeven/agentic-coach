@@ -35,7 +35,7 @@ Five plain facts, so they are easy to find:
 - 📋 **Daily recap.** At most five items about yesterday, most costly first. Each names the project and the number that made it costly, points at the exact place in the session, then says what to do instead.
 - 📆 **Weekly review.** What happened to last week's advice, the week in numbers, cost by project, this week against last week, what cost the most, what is set up but unused, and up to five proposed changes written out in full. It only proposes. Nothing is applied until you say yes to a specific proposal.
 - 💬 **Nudge.** One line at the end of a turn, only when something costly just happened (for example the same command failing again and again). Each kind of nudge appears at most once per session. Otherwise it is silent.
-- 🖥️ **Coach page.** One page that shows today's items, the week, cost, 30 days of trends, your progress, your setup and your baseline. It is rebuilt on your machine after every recap. See [The coach page](#-the-coach-page).
+- 🖥️ **Coach page.** One page that shows an overview of today, 7 days, 30 days and all time, then today's items, the week, cost, 30 days of trends, your progress, your setup and your baseline. It is rebuilt on your machine after every recap. See [The coach page](#-the-coach-page).
 - 🔁 **Follow-through.** The coach remembers what it told you and says, with numbers, whether it got better. See [Follow-through](#-follow-through).
 - 🔎 **Evidence.** Every item is checked against the session it came from before you see it. See [Evidence](#-evidence).
 - ⚖️ **Before and after.** Put two periods side by side to see whether a change helped. See [Before and after](#-before-and-after).
@@ -51,7 +51,7 @@ Five plain facts, so they are easy to find:
 - 📁 Reports are written to `~/.claude/coach/reports/` in your home folder. Nobody else sees them unless you share them yourself.
 - 🧾 The text inside transcripts is treated as data. Nothing written in a transcript is ever followed as an instruction.
 - 🤖 The recap itself is written by Claude in a normal Claude Code session on your account, the same as any other session you run. The plugin adds no other destination.
-- 🌐 The coach page is a local file. It is published only if you choose that in setup, and then only as a private page on your own Claude account. Push notifications are off unless you turn them on. When you open the page, your browser loads two fonts from Google Fonts; nothing about your sessions is sent with that request.
+- 🌐 The coach page is a local file. It is published only if you choose that in setup, and then only as a private page on your own Claude account. Push notifications are off unless you turn them on. The page uses your system's own fonts and loads nothing from the web.
 - ✂️ Short excerpts of your sessions can show under each item on the page. They are on for a page that stays on your machine and **off for a published page unless you turn them on yourself**, because whoever can open a published page could read them.
 - 🪪 To tell your Claude accounts apart, the plugin notes which account each new session started under, as the first 6 characters of the account id and of the organisation id. Full ids, emails and organisation names are never stored or shown.
 
@@ -180,8 +180,8 @@ Type one of these in Claude Code:
 | `/agentic-coach:coach audit` | what is set up but unused, as a table |
 | `/agentic-coach:coach fixes` | the fixes the coach applied for you |
 | `/agentic-coach:coach undo <key>` | take one applied fix back |
-| `/agentic-coach:coach setup` | set up or repair the schedules; optionally publish the coach page, turn on notifications and the status line |
-| `/agentic-coach:coach setup status` | check the schedules, the page, notifications, the status line and what is left out; change nothing |
+| `/agentic-coach:coach setup` | set up or repair the schedules; optionally publish the coach page, turn on notifications, the status line and the live feed runner |
+| `/agentic-coach:coach setup status` | check the schedules, the page, notifications, the status line, the live feed runner and what is left out; change nothing |
 
 Add the word `scheduled` after a recap form (as the schedules do) to mark the run as unattended.
 
@@ -191,10 +191,11 @@ If no other plugin has a skill called `coach`, the short form `/coach` works too
 
 After every recap the plugin rebuilds one page from your reports:
 
+- 🧭 **Overview:** cost, calls, sessions and tokens for Today, 7 days, 30 days or All time, with a spend graph, first-try edits, cache hit rate, corrections, spend by activity, projects, MCP servers, the sessions running now and your plan limits. See [Live feed and Overview](#-live-feed-and-overview).
 - ☀️ **Today:** the latest daily items, each with its evidence, the session facts and detector findings behind it, and the one thing to do today.
 - 📆 **This week:** the latest weekly review, with each proposed change ready to copy.
 - 💵 **Cost:** what your tokens would cost at API list prices, by day, project, model and token type, for a day, a week or all time. See [Cost](#-cost).
-- 📈 **Trends:** daily totals for the last 30 days (sessions, prompts, active time, output tokens, corrections, errors, compactions, peak context), with a plain verdict on whether your habits are getting better or worse.
+- 📈 **Trends:** daily totals for the last 30 days as line graphs (sessions, prompts, active time, output tokens, corrections, errors, compactions, peak context), with a plain verdict on whether your habits are getting better or worse.
 - 🔁 **Progress:** follow-through on earlier advice, and the latest before and after comparison.
 - 🧹 **Setup:** what is set up but unused, the fixes applied, and the status line.
 - 🏁 **Baseline:** your starting-point reports, if you have any in `~/.claude/coach/reports/baseline/`.
@@ -252,6 +253,20 @@ python3 <plugin>/coach/config.py set notify false
 ```
 
 Or delete `~/.claude/coach/config.json` to turn both off (that also removes every other setting in it). A page you already published stays where it is until you delete it yourself on claude.ai. `/agentic-coach:coach setup status` shows whether the page is published and whether notifications are on.
+
+### Change the name on the page (optional)
+
+The page's title and header say "Agentic Coach". To show another name, type this in a terminal, with the plugin folder in place of `<plugin>`:
+
+```
+python3 <plugin>/coach/config.py set display_name My coach
+```
+
+The name is kept on one line, up to 40 characters, and the next build of the page uses it. To go back to "Agentic Coach":
+
+```
+python3 <plugin>/coach/config.py unset display_name
+```
 
 ## 💵 Cost
 
@@ -428,6 +443,68 @@ ctx 310k 31% ! | $9.80 | idle 1h12m | cache cold: compact before continuing
 
 Optional settings go in a `statusline` object in `~/.claude/coach/config.json` (colour, width and thresholds); the full list is in `skills/coach/references/statusline.md`. State: `~/.claude/coach/state/<session>.statusline.json`, the launcher `~/.claude/coach/coach_statusline.py`, and a copy of your settings file from just before the change, `~/.claude/settings.json.coach-backup`.
 
+## 🟢 Live feed and Overview
+
+The Overview is the first tab of the coach page once there is data for it. It has four periods, Today, 7 days, 30 days and All time, and its own address for each (for example `#overview/all`). Its figures are worked out on your machine each time the page is built: after every recap, or when you run `python3 coach/live.py page`. A green "Live" mark beside the name shows while they are under 15 minutes old. Nothing in it leaves the machine, and work you left out (see [Leaving work out](#-leaving-work-out)) is never in it.
+
+What the Overview shows, for each period:
+
+| Figure | How it is worked out |
+|---|---|
+| Cost | Tokens at API list prices. API-equivalent, not a bill. |
+| Calls | Assistant API messages, each counted once. |
+| Tokens | Input + output + cache read + cache write, as a line graph: one point per hour today, one per day for 7 and 30 days, one per day or week for All time, and the peak. |
+| Cache hit | Cache read / (input + cache read + cache write). Cache writes count as misses. |
+| Corrections | Prompts that open by correcting the last answer, the same count the recap uses. |
+| First try | The share of edit turns with no retry. A retry is the same file edited again with a shell command in between (Edit foo, Bash, Edit foo). A different file after the shell command is not a retry, and neither is a shell command that only reads, such as grep or git log. |
+| By activity | Every turn is filed under one of 13 types: Coding, Debugging, Feature Dev, Refactoring, Testing, Exploration, Planning, Delegation, Git Ops, Build/Deploy, Brainstorming, Conversation, General. Every type with spend is listed, highest cost first, with its turns and its first-try rate. A subagent's work is filed under what the agent did. |
+| Projects | The top three by cost, the rest as Other. |
+| MCP servers | Calls, different tools used and failed calls per server, most calls first, up to 8, with readable names. |
+| Before | The same figures for the period just before: yesterday, the 7 days before, the 30 days before. All time has none. |
+
+It also lists the sessions running now (transcript changed in the last 10 minutes) with how much context each has left, up to three tips from the latest findings, and your plan limits with pace. All time covers cost, tokens, sessions and projects back to the first day on record; the other figures reach back only as far as the transcripts still on disk, and the page says from when.
+
+The activity types and the first-try rule are those of [CodeBurn](https://github.com/getagentseal/codeburn) (MIT licence), written again in Python in `coach/activity.py`. No model is asked: the tools a turn used decide first, then keywords in the prompt.
+
+### The live.json file
+
+The same figures can be written to one small file, `~/.claude/coach/live.json`, which other tools on your machine can read. Its fields are described in [docs/LIVE-FEED.md](docs/LIVE-FEED.md).
+
+```
+python3 coach/live.py write            # write the file (skipped when it is under a minute old)
+python3 coach/live.py write --force    # write it now
+python3 coach/live.py show             # print the figures without writing the file
+python3 coach/live.py page             # rebuild the coach page with fresh figures
+python3 coach/live.py time             # cold and warm run times on this machine
+```
+
+### Limits
+
+The limits come from one place only: the 5-hour and weekly percentages that Claude Code hands to status line scripts (`rate_limits` in the [status line input](https://code.claude.com/docs/en/statusline)). The coach status line keeps them in `~/.claude/coach/state/limits.json` and the Overview reads that file. The coach never calls a usage endpoint and never reads your login token or the Keychain.
+
+- Pace is used percent less the share of the window that has passed. 7% used with 46% of the window gone is 39% in reserve; 80% used at the halfway point is 30% over pace.
+- A time the limit runs out is given only when you are over pace. Nothing is said about pace in the first 3 percent of a window.
+- No status line, no limits: turn it on in `/agentic-coach:coach setup` (see Status line above). The status line belongs to the terminal. Sessions in the Claude desktop app's Code tab do not run it, so on a day spent only there the limits block stays hidden. Claude Code reports a weekly figure for all models together; it does not report one per model.
+
+### Keep it fresh once a minute (optional, macOS)
+
+This is an optional step of `/agentic-coach:coach setup`, and it asks first. Everything else in the coach works without it. It adds a per-user LaunchAgent, `com.agentic-coach.live`, that runs `live.py write` once a minute, so `live.json` is never more than a minute old and the cache behind the Overview stays warm, which keeps each page build quick. It does not rebuild the page by itself.
+
+What it costs:
+
+- 🔋 One short background run a minute, at low priority: about a tenth of a second of CPU once the cache is warm. The first run reads every transcript once and takes about half a minute.
+- 📁 Files under `~/.claude/coach/` only: `live.json`, the caches `live-cache.json` and `live-mids.json`, a small launcher `coach_live.py` with its `live.path` note, `live.lock` (one run at a time), and `live.err.log` for errors. The one file outside it is the LaunchAgent itself, `~/Library/LaunchAgents/com.agentic-coach.live.plist`.
+
+By hand:
+
+```
+python3 coach/setup_check.py live-agent status      # read-only
+python3 coach/setup_check.py live-agent install     # writes ~/Library/LaunchAgents/com.agentic-coach.live.plist and loads it
+python3 coach/setup_check.py live-agent uninstall   # unloads it and removes the LaunchAgent, the launcher and its note
+```
+
+A transcript that did not change since the last run is not opened, and one that grew is read from where the last run stopped.
+
 ## 🙈 Leaving work out
 
 Some work you may never want to see in the coach. Three settings do that. Each one drops the work from every digest, total, cost figure, ledger row, report and page from then on. The coach never prints what you left out: setup status only gives counts, such as "2 exclusion rules, 5 sessions excluded".
@@ -506,6 +583,12 @@ Everything goes under `~/.claude/coach/` in your home folder, never inside the p
   state/                       what the nudge and the status line have seen in each session
                                (cleared after 30 days), and session-accounts.jsonl
   coach_statusline.py          the status line launcher, only if you turned the status line on
+  live.json                    the live feed (docs/LIVE-FEED.md), when it has been written
+  live-cache.json              per-transcript figures behind the Overview, so a build reads only what changed
+  live-mids.json               the message ids already counted, so none is counted twice
+  coach_live.py, live.path     the live feed launcher and its note, only if you turned the runner on
+  live.err.log                 the runner's errors, only if you turned the runner on
+  live.lock                    keeps two live feed runs from overlapping
   permission-prompts.jsonl     a local log of permission prompts, used by the weekly review
   off                          exists only if you turned the nudge off
 ```
@@ -525,6 +608,7 @@ Every key `config.json` can hold, all optional:
 | `unknown_account` | `include` or `exclude` sessions with no account record |
 | `exclude_dates` | days or ranges that are never shown |
 | `statusline` | optional status line settings |
+| `display_name` | the name in the page title and header (default "Agentic Coach") |
 
 `python3 <plugin>/coach/config.py show` prints them as the coach reads them.
 
@@ -548,7 +632,7 @@ To switch the whole plugin off instead, type `/plugin` in Claude Code, pick `age
 
 ## 👋 Uninstall
 
-1. If you turned the status line on, turn it off first: ask Claude, or run `python3 <plugin>/coach/statusline.py remove`.
+1. If you turned the status line on, turn it off first: ask Claude, or run `python3 <plugin>/coach/statusline.py remove`. If you turned the live feed runner on, take it out too: `python3 <plugin>/coach/setup_check.py live-agent uninstall`.
 2. Remove the two schedules. In Claude Code type `Delete the scheduled tasks agentic-coach-daily and agentic-coach-weekly` and approve. (If you used `cron`, run `crontab -e` and delete the two lines.)
 3. Remove the plugin. In Claude Code type the line that matches how you installed it:
 
@@ -586,13 +670,18 @@ coach/compare.py       two periods side by side, snapshots
 coach/config_audit.py  what is set up against what was used
 coach/applyfix.py      preview, apply, undo and list for the three kinds of fix
 coach/statusline.py    the status line, and its install and remove
-coach/setup_check.py   read-only check of schedules, old hooks, old reports, page, status line, exclusions
+coach/setup_check.py   read-only check of schedules, old hooks, old reports, page, status line, exclusions;
+                       live-agent status, install and uninstall for the live feed runner
+coach/live.py          the live feed: the Overview's figures and live.json (docs/LIVE-FEED.md)
+coach/activity.py      files each turn under an activity type, and the first-try edit rule
 coach/nudge.py         Stop hook
 coach/permlog.py       PermissionRequest hook: logs the prompt, decides nothing
 coach/common.py        shared helpers and the config reader
 skills/coach/          SKILL.md, plus references/: daily.md and weekly.md (the two flows), setup.md,
                        followthrough.md, evidence.md, compare.md, configaudit.md, applyfix.md, statusline.md
 hooks/hooks.json       the three hooks, 5 second limit each
+docs/LIVE-FEED.md      the live.json schema and field rules
+docs/mockups/          design mockups of the coach page (sample data only)
 tests/                 unittest cases on synthetic data, one file per area
 ```
 
@@ -634,6 +723,19 @@ Releasing: bump `version` in `.claude-plugin/plugin.json` and in `.claude-plugin
 The `SessionStart` hook (`accounts.py hook`, on `startup`, `resume` and `clear`) appends one line per session start to `state/session-accounts.jsonl`: the session id, the time, and the short forms of the account and organisation from `.claude.json`. It prints nothing and always exits 0.
 
 Where the 1.2.0 features hook into a recap: `recap.py` adds to its plan the paths of `followthrough.py` and `evidence.py`, the reference files, `unattended` and `fixes`, and for a weekly run the comparison file and the saved audit. `skills/coach/references/daily.md` and `weekly.md` are the single flow; the other references are opened from the step that names them.
+
+## 📝 Changes
+
+### 1.3.0
+
+- 🧭 **Overview tab.** The coach page now opens on an overview with four periods, Today, 7 days, 30 days and All time: cost, calls, sessions and tokens with a spend graph, first-try edits, cache hit rate, corrections, spend by activity, projects, MCP servers, the sessions running now, coach tips and your plan limits. See [Live feed and Overview](#-live-feed-and-overview).
+- 🟢 **Live feed.** `coach/live.py` works out those figures from your transcripts, reading only what changed since the last run, and can write them to `~/.claude/coach/live.json` for other tools to read. Its fields are in [docs/LIVE-FEED.md](docs/LIVE-FEED.md).
+- ⏱️ **Optional once-a-minute runner (macOS).** `/agentic-coach:coach setup` can add a LaunchAgent that keeps `live.json` fresh every minute. It asks first, costs about a tenth of a second of CPU a minute, and keeps its files under `~/.claude/coach/`.
+- 🗂️ **Activity types and first-try edits.** Every turn is filed under one of 13 activity types, and edits are counted as right first time or retried. Both follow the rules of [CodeBurn](https://github.com/getagentseal/codeburn) (MIT licence), written again in Python.
+- 🎨 **A restyled page.** System fonts (nothing is loaded from the web any more), new colours in light and dark, one even width for every tab, and line graphs on the Trends tab.
+- 🔌 **Readable MCP server names.** Servers show by name, and connectors that only appear as an id are named from their tools where the coach knows them.
+- 🎯 **A fairer cache hit rate.** Cache writes now count as misses, so the rate is no longer close to 100 percent for nearly every session.
+- 🏷️ **A name of your own.** The page's title and header read "Agentic Coach" by default; `config.py set display_name <text>` changes it.
 
 ## 📏 Limits
 

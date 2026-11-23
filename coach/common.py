@@ -156,6 +156,17 @@ def config_problem():
             "Fix or delete the file, then run again." % config_file())
 
 
+DEFAULT_DISPLAY_NAME = "Agentic Coach"
+DISPLAY_NAME_MAX = 40
+
+
+def clean_display_name(value):
+    """A display name on one line, spaces collapsed, at most 40 characters; "" when unusable."""
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())[:DISPLAY_NAME_MAX].strip()
+
+
 def load_config():
     """The person's settings, with defaults for whatever is missing. A missing or
     broken file is all defaults.
@@ -177,11 +188,13 @@ def load_config():
     When the key is absent it is on for a local-only page and off once the page
     is published (page_url set). evidence_on_page_set says whether the person
     chose it themselves. A file that cannot be read turns it off.
+    display_name: the name shown in the page title and header, default
+    "Agentic Coach". A value that is not usable text falls back to the default.
     """
     cfg = {"page_url": None, "notify": False, "projects": [], "session_projects": {},
            "exclude": [], "evidence_on_page": True, "evidence_on_page_set": False,
            "only_account": None, "unknown_account": "include", "exclude_dates": [],
-           "other_project": None, "damaged": False}
+           "other_project": None, "display_name": DEFAULT_DISPLAY_NAME, "damaged": False}
     try:
         with open(config_file()) as fh:
             raw = json.load(fh)
@@ -242,6 +255,9 @@ def load_config():
     other = raw.get("other_project")
     if isinstance(other, str) and other.strip():
         cfg["other_project"] = " ".join(other.replace("|", "/").split())[:60]
+    name = clean_display_name(raw.get("display_name"))
+    if name:
+        cfg["display_name"] = name
     if isinstance(raw.get("evidence_on_page"), bool):
         cfg["evidence_on_page"] = raw["evidence_on_page"]
         cfg["evidence_on_page_set"] = True

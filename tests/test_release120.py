@@ -777,7 +777,14 @@ class AccountFilterTest(AccountBase):
     def test_only_account_drops_days_under_another_known_account(self):
         ledger.backfill(self.projects)
         self.assertEqual(self.out_tokens(), {"alpha": 100000, "beta": 600000, "gamma": 800000})
-        self.assertIsNone(config.change(["set", "only_account", "current"]))
+        # "current" from a Terminal session: no host account in the environment, so
+        # the .claude.json login. (Inside the desktop app the host's account wins.)
+        keys = [k for k in os.environ if k.startswith("CLAUDE_CODE_")]
+        saved = dict((k, os.environ.pop(k)) for k in keys)
+        try:
+            self.assertIsNone(config.change(["set", "only_account", "current"]))
+        finally:
+            os.environ.update(saved)
         self.assertEqual(common.load_config()["only_account"], "11aa22")
         r = ledger.backfill(self.projects, rebuild=True)
         self.assertEqual(self.out_tokens(), {"alpha": 100000, "beta": 400000, "gamma": 800000})

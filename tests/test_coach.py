@@ -389,7 +389,7 @@ class ConfigTest(unittest.TestCase):
         out = {"page_url": None, "notify": False, "projects": [], "session_projects": {},
                "exclude": [], "evidence_on_page": True, "evidence_on_page_set": False,
                "only_account": None, "unknown_account": "include", "exclude_dates": [],
-               "other_project": None, "damaged": False}
+               "other_project": None, "display_name": "Agentic Coach", "damaged": False}
         out.update(kw)
         return out
 
@@ -608,8 +608,10 @@ class PackagingTest(unittest.TestCase):
     def test_no_machine_paths_in_what_ships(self):
         bad = []
         for folder, _dirs, files in os.walk(ROOT):
-            if ".git" in folder or "__pycache__" in folder:
-                continue
+            parts = os.path.relpath(folder, ROOT).split(os.sep)     # inside the repo only
+            if ".git" in parts or "__pycache__" in parts or ".build" in parts \
+                    or "build" in parts:
+                continue        # git, caches and ignored build output
             for name in files:
                 if not name.endswith((".py", ".md", ".json")):
                     continue
