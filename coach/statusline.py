@@ -28,6 +28,11 @@ Setup helpers (used by /coach setup; each prints JSON):
 Speed: no transcript is read. Everything comes from stdin plus one small state
 file per session, <coach home>/state/<session>.statusline.json, which keeps the
 cost at the start of the current turn and the cost of the first turn.
+
+Plan limits: when the JSON carries rate_limits (five_hour, seven_day, each with
+used_percentage and resets_at), the two numbers of each window are kept in
+<coach home>/state/limits.json with the time they were seen. The live feed
+(live.py) reads that file; nothing else does. No request is made for them.
 No network. Any error prints a minimal line and exits 0.
 """
 import json
@@ -280,6 +285,71 @@ def advance(st, pid, total, tokens, now):
     return json.dumps(st, sort_keys=True) != before
 
 
+# ---------- plan limits, as Claude Code reports them ----------
+
+LIMITS_NAME = "limits.json"
+LIMIT_WINDOWS = ("five_hour", "seven_day")
+LIMITS_REFRESH_SEC = 60
+
+
+def limits_path(coach_dir):
+    return os.path.join(coach_dir, "state", LIMITS_NAME)
+
+
+def read_limits(payload):
+    """{"five_hour": {"used", "resets_at"}, ...} from the documented rate_limits fields.
+
+    A window is left out when it is absent or either number is not usable.
+    Claude Code sends rate_limits only to people on a claude.ai subscription,
+    and only after the first API response of a session.
+    """
+    out = {}
+    rl = _dict(_dict(payload).get("rate_limits"))
+    for name in LIMIT_WINDOWS:
+        w = _dict(rl.get(name))
+        used = _num(w.get("used_percentage"))
+        resets = _num(w.get("resets_at"))
+        if used is None or resets is None or used < 0 or resets <= 0:
+            continue
+        out[name] = {"used": round(float(used), 2), "resets_at": int(resets)}
+    return out
+
+
+def capture_limits(payload, coach_dir, now):
+    """Keep the limit numbers of this payload in state/limits.json. Returns True if written.
+
+    Each window is kept on its own, with the time it was seen ("t"). The file
+    is rewritten when a number changed, or once a minute so the time stays fresh.
+    """
+    seen = read_limits(payload)
+    if not seen:
+        return False
+    path = limits_path(coach_dir)
+    old, how = _read_json(path)
+    windows = dict(_dict(_dict(old).get("windows"))) if how == "ok" else {}
+    changed = False
+    for name, w in seen.items():
+        prev = _dict(windows.get(name))
+        t = _num(prev.get("t"))
+        was, till = _num(prev.get("used")), _num(prev.get("resets_at"))
+        if was is not None and till is not None and till > now and (
+                w["resets_at"] < till or (w["resets_at"] == till and w["used"] < was)):
+            # An idle session redrawing numbers it got earlier: use within a window
+            # never goes down, and a window that ends sooner is an older one.
+            continue
+        if (prev.get("used") != w["used"] or prev.get("resets_at") != w["resets_at"]
+                or t is None or now - t >= LIMITS_REFRESH_SEC or t > now):
+            windows[name] = {"used": w["used"], "resets_at": w["resets_at"], "t": int(now)}
+            changed = True
+    if not changed:
+        return False
+    state_dir = os.path.dirname(path)
+    if not os.path.isdir(state_dir):
+        os.makedirs(state_dir)
+    _write_text(path, json.dumps({"v": 1, "windows": windows}, separators=(",", ":")))
+    return True
+
+
 # ---------- the numbers ----------
 
 def context_usage(payload):
@@ -362,6 +432,12 @@ def snapshot(payload, coach_dir=None, now=None, save=True):
         total = None
     pid = payload.get("prompt_id")
     pid = pid[:80] if isinstance(pid, str) and pid else ""
+
+    if save:
+        try:
+            capture_limits(payload, coach_dir, now)
+        except Exception:       # the line must still print when the limits cannot be kept
+            pass
 
     sid = _sid(payload)
     st = None

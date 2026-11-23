@@ -1001,7 +1001,9 @@ def weekly_file(label, today=None, projects_dir=None):
     return path
 
 
-def main(argv=None):
+def main(argv=None, today=None):
+    """Command line entry. `today` pins the date relative periods count back from
+    (lastN, week, lastweek); None means the real date."""
     ap = argparse.ArgumentParser(
         description="Compare two periods of Claude Code use, or store one as a snapshot.",
         epilog="Forms: nothing or lastN | week | around DATE [DAYS] | four dates | "
@@ -1044,7 +1046,7 @@ def main(argv=None):
                 raise UsageError("a snapshot covers all projects; drop --project")
             if args.no_store:
                 raise UsageError("a snapshot is a stored file; drop --no-store")
-            p = one_period(words[1:])
+            p = one_period(words[1:], today)
             m = collect(p["first"], p["end"], **kw)
             path = save_snapshot(args.label, m, args.force)
             out = {"snapshot": snapshot_name(args.label), "file": path,
@@ -1064,7 +1066,7 @@ def main(argv=None):
                 words = list(args.before) + list(args.after)
             elif args.days:
                 raise UsageError("--days goes with --around")
-            out = run_words(words, **kw)
+            out = run_words(words, today=today, **kw)
             if not args.no_store and not args.project:
                 try:
                     _write_json(latest_file(), out)

@@ -1400,6 +1400,161 @@ def chart_svg(days, values, kind, title, threshold=None):
     return "".join(parts)
 
 
+def fmt_usd2(v):
+    """Dollars with cents and thousands separators, as the Overview prints money."""
+    return "${:,.2f}".format(max(0.0, float(v or 0)))
+
+
+def line_x(i, n, width=1000.0, pad=4.0):
+    """Where point i of n sits across a line graph of the given width."""
+    return width / 2.0 if n <= 1 else pad + (width - 2 * pad) * i / float(n - 1)
+
+
+def line_svg(values, labels=None, title="", mark=None, size=(1000, 210),
+             grid=True, area=True, hits=True, zero=True, avg=None, ceiling=None, limit=None):
+    """Line graph of one series: a line with a soft area under it, dashed grid
+    lines, a ring on the last point and, with mark, a ring on that point too.
+
+    It is drawn to be stretched to any width (preserveAspectRatio none). Strokes
+    keep their width and every ring is a round line cap, so nothing is distorted
+    and the graph can fill a phone or an extra wide screen from one drawing.
+    values: numbers, None for a point with no data. labels: one readout text per
+    point; with hits each point gets a hover and focus target that carries it.
+    zero: the scale starts at 0; without it the scale runs from the lowest value.
+    avg: a second series on the same scale, drawn as a dashed line (a running average).
+    ceiling: the top of the scale when it should sit above the highest value (a round figure).
+    limit: a threshold on the same scale, drawn as a dashed line across the graph.
+    """
+    W, H = float(size[0]), float(size[1])
+    top, base = (16.0, H - 10.0) if grid else (7.0, H - 7.0)
+    n = len(values)
+    pts = [(i, float(v)) for i, v in enumerate(values)
+           if _num(v) is not None and math.isfinite(v)]
+    hi = max([v for _i, v in pts] or [0.0])
+    if _num(ceiling) is not None and math.isfinite(ceiling):
+        hi = max(hi, float(ceiling))
+    lo = 0.0 if zero else min([v for _i, v in pts] or [0.0])
+    if zero and hi <= 0:
+        hi = 1.0
+
+    def xy(i, v):
+        y = (top + base) / 2.0 if hi == lo else base - (base - top) * (v - lo) / (hi - lo)
+        return line_x(i, n, W), y
+
+    at = dict((i, xy(i, v)) for i, v in pts)
+    parts = ['<svg class="lg" viewBox="0 0 %d %d" preserveAspectRatio="none" role="img" '
+             'aria-label="%s"%s>' % (W, H, esc(title), ' tabindex="0"' if hits and pts else "")]
+    if grid:
+        for gy in (top, (top + base) / 2.0):
+            parts.append('<line class="lg-grid" x1="0" y1="%.1f" x2="%d" y2="%.1f"/>' % (gy, W, gy))
+        parts.append('<line class="lg-base" x1="0" y1="%.1f" x2="%d" y2="%.1f"/>' % (base, W, base))
+    if _num(limit) is not None and math.isfinite(limit) and lo <= limit <= hi and hi > lo:
+        ly = xy(0, float(limit))[1]
+        parts.append('<line class="lg-limit" x1="0" y1="%.1f" x2="%d" y2="%.1f"/>' % (ly, W, ly))
+    line =" ".join("%.1f,%.1f" % at[i] for i, _v in pts)
+    if len(pts) > 1:
+        if area:
+            parts.append('<polygon class="lg-area" points="%.1f,%.1f %s %.1f,%.1f"/>'
+                         % (at[pts[0][0]][0], base, line, at[pts[-1][0]][0], base))
+        parts.append('<polyline class="lg-line" points="%s"/>' % line)
+    smooth = [(i, float(v)) for i, v in enumerate(avg or [])
+              if i < n and _num(v) is not None and math.isfinite(v)]
+    if len(smooth) > 1:
+        parts.append('<polyline class="lg-avg" points="%s"/>'
+                     % " ".join("%.1f,%.1f" % xy(i, v) for i, v in smooth))
+    if hits:
+        slot = W if n <= 1 else (W - 8.0) / (n - 1)
+        for i, _v in pts:
+            x, y = at[i]
+            left = max(0.0, x - slot / 2.0)
+            label = labels[i] if labels and i < len(labels) else ""
+            parts.append('<g class="b" data-r="%s"><rect class="ch-hit" x="%.1f" y="0" width="%.1f" '
+                         'height="%d"/><path class="lg-dot" d="M%.1f %.1fh0"/></g>'
+                         % (esc(label), left, min(W, x + slot / 2.0) - left, H, x, y))
+    rings = [(pts[-1][0], "")] if pts else []
+    if mark in at:
+        rings = [r for r in rings if r[0] != mark] + [(mark, " peak")]
+    for i, cls in rings:
+        parts.append('<path class="lg-ring%s" d="M%.1f %.1fh0"/><path class="lg-hole" d="M%.1f %.1fh0"/>'
+                     % ((cls,) + at[i] + at[i]))
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def running_average(values, span=7):
+    """For each point, the mean of it and the points before it, up to `span` in all."""
+    out = []
+    for i in range(len(values)):
+        window = values[max(0, i - span + 1):i + 1]
+        out.append(sum(window) / float(len(window)))
+    return out
+
+
+def axis_usd(v):
+    """A dollar figure for the side of a graph: $0, $450, $1.2k, $12k."""
+    v = max(0.0, float(v or 0))
+    if v >= 10000:
+        return "$%dk" % _half_up(v / 1000.0)
+    if v >= 1000:
+        return ("$%.1fk" % (v / 1000.0)).replace(".0k", "k")
+    if v >= 10 or v == 0:
+        return "$%d" % _half_up(v)
+    return "$%.2f" % v
+
+
+def _clean(v, kind):
+    """True when fmt_num prints v exactly, so a scale label never rounds."""
+    def whole(x):
+        return abs(x - round(x)) < 1e-9
+    if kind == "tok":
+        return whole(v / 1e5) if v >= 999500 else whole(v / 1000.0) if v >= 1000 else whole(v)
+    if kind == "dec":
+        return whole(v * 10)
+    return whole(v)
+
+
+def scale_top(top, kind):
+    """The top of a Trends scale: the first round figure at or above top whose half,
+    the middle label, is printed exactly too (5 would label its middle 2, so 8 is used)."""
+    first = max(nice_max(top), 4.0 if kind == "int" else 0.0)
+    p = 10.0 ** math.floor(math.log10(first))
+    for mult in (p, p * 10, p * 100):
+        for step in (1, 2, 2.5, 4, 5, 8):
+            v = round(step * mult, 9)
+            if v >= first and _clean(v, kind) and _clean(v / 2.0, kind):
+                return v
+    return first
+
+
+def trend_graph(days, values, kind, title, threshold=None):
+    """Line graph of one daily series, drawn like the Overview's spend graph: the scale
+    beside it (a round top, its half and 0), the first and last day under it, and the
+    threshold, when the series has one, as a dashed line with its figure on it."""
+    present = [v for v in values if v is not None]
+    top = max(present) if present else 0
+    if threshold:
+        top = max(top, threshold * 1.1)
+    ymax = scale_top(top, kind)
+    labels =["%s: %s" % (short_date(d), fmt_num(v, kind)) for d, v in zip(days, values)]
+    svg = line_svg(values, labels, "Line graph of %s, last %d days" % (title, len(days)),
+                   ceiling=ymax, limit=threshold or None)
+    # the same 210-high drawing as line_svg: the top grid line at 16, the base line at 200
+    scale = "".join('<span style="top:%.1f%%">%s</span>' % (100.0 * y / 210.0, esc(fmt_num(v, kind)))
+                    for y, v in ((16.0, ymax), (108.0, ymax / 2.0), (200.0, 0)))
+    lab = ""
+    if threshold and 0 <= threshold <= ymax:
+        ty = 200.0 - 184.0 * threshold / ymax
+        lab = ('<span class="lg-limit-lab" aria-hidden="true" style="top:%.1f%%">%s line</span>'
+               % (100.0 * ty / 210.0, esc(fmt_num(threshold, kind))))
+    axis = ""
+    if days:
+        axis = "".join('<span style="left:%.1f%%">%s</span>' % (line_x(i, len(days)) / 10.0,
+                                                                 esc(short_date(days[i])))
+                       for i in sorted(set((0, len(days) - 1))))
+    return ('<div class="lg-wrap"><div class="lg-plot"><div class="lg-y" aria-hidden="true">%s</div>'
+            '%s%s</div><div class="lg-x" aria-hidden="true">%s</div></div>' % (scale, svg, lab, axis))
+
+
 def chart_card(key, days, data, threshold=None):
     _k, title, kind, fn = SERIES_BY_KEY[key]
     values = [fn(data[d]) if d in data else None for d in days]
@@ -1408,9 +1563,9 @@ def chart_card(key, days, data, threshold=None):
         if v is not None:
             latest = "%s: %s" % (short_date(d), fmt_num(v, kind))
             break
-    return ('<figure class="chart"><figcaption><span class="ch-title">%s</span>'
-            '<span class="readout" data-default="%s">%s</span></figcaption>%s</figure>'
-            % (esc(title), esc(latest), esc(latest), chart_svg(days, values, kind, title, threshold)))
+    return ('<figure class="chart trend"><figcaption><span class="ch-title">%s</span>'
+            '<span class="readout" data-default="%s" aria-live="polite">%s</span></figcaption>%s</figure>'
+            % (esc(title), esc(latest), esc(latest), trend_graph(days, values, kind, title, threshold)))
 
 
 def _ratio(rows, num, den, scale):
@@ -1481,7 +1636,7 @@ def render_trends(all_days, today):
                 '<p>Charts appear once the daily run has sessions to count. '
                 'Run a daily recap to start.</p></div>')
     out = ['<p class="lede">Daily totals for the last %d days, %s to %s. Scheduled-task sessions '
-           'are left out, so these are your own habits. The highlighted bar is the latest day with data.</p>'
+           'are left out, so these are your own habits. The ringed point is the latest day with data.</p>'
            % (len(days), esc(short_date(days[0])), esc(short_date(days[-1])))]
     used = set()
     for name, base, metrics, charts in HEADLINES:
@@ -2008,6 +2163,321 @@ def attach_item_evidence(dailies, weeklies, projects_dir, hide=NO_HIDE):
     return "".join(out)
 
 
+# ---------- overview (the live feed) ----------
+# The feed is live.snapshot(), or the live.json it writes (docs/LIVE-FEED.md). Every value is checked and cut here, so the script in the page only
+# ever meets the shapes below, with None where the feed has nothing to say.
+
+LIVE_VERSION = 1
+LIVE_PERIODS = (("today", "Today"), ("week", "Last 7 days"), ("month", "Last 30 days"),
+                ("all", "All time"))
+LIVE_SERIES_MAX = 600       # All time draws a point a week: over eleven years of them
+LIVE_LEVELS = ("ok", "warn", "crit")
+_ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
+
+
+def load_live():
+    """The live feed as a dict, or None when there is none.
+
+    First live.snapshot(), when the coach has that module. When it has not, or
+    the call fails or hands back something else, the live.json in the coach
+    folder ($COACH_HOME moves it). Neither: None, and the Overview stays empty.
+    """
+    mod = optional("live")
+    snap = getattr(mod, "snapshot", None) if mod is not None else None
+    feed = guarded(snap) if callable(snap) else None
+    if not isinstance(feed, dict):
+        feed = read_json(os.path.join(C.coach_home(), "live.json"))
+    if not isinstance(feed, dict) or feed_is_empty(feed):
+        return None
+    return feed
+
+
+def feed_is_empty(feed):
+    """True when a current-version feed holds nothing to show: no session or spend
+    in any period, no limits and nothing running (a fresh install, or 30 quiet
+    days). The Overview then says there are no live numbers yet instead of a page
+    of zeros. A newer-version feed is never empty here, so "Update the coach" shows."""
+    version = feed.get("version")
+    if not isinstance(version, (int, float)) or isinstance(version, bool) or version > 1:
+        return False
+    periods = feed.get("periods")
+    if isinstance(periods, dict):
+        for p in periods.values():
+            if isinstance(p, dict) and ((_fin(p.get("sessions")) or 0) > 0
+                                        or (_fin(p.get("cost_usd")) or 0) > 0):
+                return False
+    limits = feed.get("limits")
+    if isinstance(limits, dict) and limits.get("rows"):
+        return False
+    return not feed.get("running")
+
+
+def _fin(v):
+    v = _num(v)
+    try:
+        return v if v is not None and math.isfinite(v) and abs(v) < 1e15 else None
+    except OverflowError:          # an integer too large to be a float
+        return None
+
+
+def _half_up(v):
+    """Round as the script in the page does (Math.round), so both print the same figure."""
+    return int(math.floor(v + 0.5))
+
+
+def _rate(v):
+    v = _fin(v)
+    return v if v is not None and 0 <= v <= 1 else None
+
+
+def _iso(v):
+    return v[:32] if isinstance(v, str) and _ISO_RE.match(v) else None
+
+
+def _txt(v, limit):
+    return cut(clean(v), limit) if isinstance(v, str) and v.strip() else None
+
+
+def _part(v):
+    return v if isinstance(v, dict) else {}
+
+
+def _rows(v, limit):
+    return [r for r in v if isinstance(r, dict)][:limit] if isinstance(v, list) else []
+
+
+def heat_pct(value, top):
+    """Length of a heat bar as a whole percent of its track: the row's value as a
+    share of the largest row in its table. A row with anything at all keeps a
+    sliver (2), a row with nothing has no bar (0)."""
+    v, t = _fin(value), _fin(top)
+    if v is None or t is None or v <= 0 or t <= 0:
+        return 0
+    return max(2, min(100, int(round(100.0 * v / t))))
+
+
+def add_heat(rows, key):
+    """Give each row its heat bar length, measured on the given figure."""
+    top = max([r[key] for r in rows if r.get(key) is not None] or [0])
+    for r in rows:
+        r["heat"] = heat_pct(r.get(key), top)
+    return rows
+
+
+def live_version(v):
+    """None for a feed of this version (or one that does not say), else the newer
+    version it claims: a number above ours, however it is written ("2", "2.0.0")."""
+    if isinstance(v, str):
+        m = re.match(r"\s*v?(\d+(?:\.\d+)?)", v)
+        v = float(m.group(1)) if m else None
+    v = _num(v)
+    if v is None or v <= LIVE_VERSION:
+        return None
+    return v if _fin(v) is not None else LIVE_VERSION + 1
+
+
+def _trend(v, check):
+    """A measure's own series: up to 12 steps, None where a step has no data.
+    None when the feed carries no series for it."""
+    return [check(x) for x in v[:12]] if isinstance(v, list) else None
+
+
+def live_period(p, label, hide=NO_HIDE):
+    series = []
+    for r in _rows(p.get("series"), LIVE_SERIES_MAX):
+        if _iso(r.get("t")):
+            series.append({"t": _iso(r["t"]), "tokens": max(0, _fin(r.get("tokens")) or 0),
+                           "usd": max(0, _fin(r.get("usd")) or 0)})
+    peak = _part(p.get("peak"))
+    ft, ch, co = _part(p.get("first_try")), _part(p.get("cache_hit")), _part(p.get("corrections"))
+    # All time: activities, first-try, cache hit, corrections and MCP servers only reach
+    # back as far as the transcripts do. When that is later than the period's first day,
+    # those blocks say so ("Detail from Nov 9").
+    since, detail = _iso(p.get("since")), _iso(p.get("detail_since"))
+    unit = p.get("series_unit")
+    return {
+        "label": _txt(p.get("label"), 40) or label,
+        "detail_from": nice_day(detail) if since and detail and detail[:10] > since[:10] else None,
+        "cost_usd": _fin(p.get("cost_usd")), "prev_cost_usd": _fin(p.get("prev_cost_usd")),
+        "calls": _fin(p.get("calls")), "sessions": _fin(p.get("sessions")),
+        "tokens": _fin(p.get("tokens")),
+        "series_unit": unit if unit in ("hour", "week") else "day",
+        "series": series,
+        "peak": ({"t": _iso(peak["t"]), "tokens": _fin(peak.get("tokens")),
+                  "usd": _fin(peak.get("usd"))} if _iso(peak.get("t")) else None),
+        "first_try": {"rate": _rate(ft.get("rate")), "prev_rate": _rate(ft.get("prev_rate")),
+                      "edit_turns": _fin(ft.get("edit_turns")),
+                      "series": _trend(ft.get("series"), _rate)},
+        "cache_hit": {"rate": _rate(ch.get("rate")), "prev_rate": _rate(ch.get("prev_rate")),
+                      "series": _trend(ch.get("series"), _rate)},
+        "corrections": {"count": _fin(co.get("count")), "prev_count": _fin(co.get("prev_count")),
+                        "series": _trend(co.get("series"), _fin)},
+        "activities": add_heat([
+            {"name": _txt(r.get("name"), 60) or "?", "usd": _fin(r.get("usd")),
+             "turns": _fin(r.get("turns")), "share": _rate(r.get("share")),
+             "first_try": _rate(r.get("first_try"))}
+            for r in _rows(p.get("activities"), 30)], "usd"),
+        "projects": add_heat([
+            {"name": _txt(r.get("name"), 60) or "?", "sessions": _fin(r.get("sessions")),
+             "usd": _fin(r.get("usd")), "share": _rate(r.get("share"))}
+            for r in _rows(p.get("projects"), 4)], "usd"),
+        "mcp_servers": add_heat([
+            {"name": _txt(r.get("name"), 60) or "?", "calls": _fin(r.get("calls")),
+             "tools": _fin(r.get("tools")), "errors": _fin(r.get("errors"))}
+            for r in _rows(p.get("mcp_servers"), 30)
+            if not hide.text(r.get("name"))][:8], "calls"),      # a server's name is the person's
+    }
+
+
+def live_view(feed, hide=NO_HIDE):
+    """The feed as the page embeds it, or None when there is no feed.
+
+    A feed of a later version is cut down to its version number, and the page
+    asks for an update. A feed written before an exclude rule existed may still
+    hold that work: a period with a project the rules cover was counted with it
+    and is left out whole, and so is a running session or a tip that names it.
+    Only names are checked, never the feed's own words (labels, activity types).
+    """
+    if not isinstance(feed, dict):
+        return None
+    newer = live_version(feed.get("version"))
+    if newer is not None:
+        return {"version": newer}
+    periods = {}
+    for key, label in LIVE_PERIODS:
+        p = _part(feed.get("periods")).get(key)
+        # "Other" is the feed's word for the projects it folds together, not a name
+        if isinstance(p, dict) and not any(hide.text(r.get("name"))
+                                           for r in _rows(p.get("projects"), 60)
+                                           if r.get("name") != "Other"):
+            periods[key] = live_period(p, label, hide)
+    limits = _part(feed.get("limits"))
+    rows = []
+    for r in _rows(limits.get("rows"), 8):
+        used = _fin(r.get("used_pct"))
+        if used is None:
+            continue
+        level = r.get("level") if r.get("level") in LIVE_LEVELS else (
+            "crit" if used >= 90 else "warn" if used >= 70 else "ok")
+        rows.append({"key": _txt(r.get("key"), 40) or "", "label": _txt(r.get("label"), 40) or "Limit",
+                     "used_pct": used, "resets_at": _iso(r.get("resets_at")),
+                     "pace_pct": _fin(r.get("pace_pct")), "runs_out_at": _iso(r.get("runs_out_at")),
+                     "level": level})
+    running = []
+    for r in _rows(feed.get("running"), 12):
+        if not _txt(r.get("project"), 60) or hide.text(r.get("project"), r.get("branch")):
+            continue
+        running.append({"project": _txt(r["project"], 60), "branch": _txt(r.get("branch"), 60),
+                        "model": _txt(r.get("model"), 40), "started": _iso(r.get("started")),
+                        "context_pct": _fin(r.get("context_pct")),
+                        "context_left_tokens": _fin(r.get("context_left_tokens")),
+                        "level": r.get("level") if r.get("level") in LIVE_LEVELS else "ok"})
+    tips = []
+    for r in _rows(feed.get("tips"), 3):
+        if _txt(r.get("title"), 200) and not hide.text(r.get("title"), r.get("advice")):
+            tips.append({"title": _txt(r["title"], 200), "advice": _txt(r.get("advice"), 300) or "",
+                         "pattern": _txt(r.get("pattern"), 60) or ""})
+    return {"version": LIVE_VERSION, "updated": _iso(feed.get("updated")), "periods": periods,
+            "limits": {"as_of": _iso(limits.get("as_of")) if rows else None, "rows": rows},
+            "running": running, "tips": tips}
+
+
+def nice_day(iso):
+    """Nov 23, from a local ISO time."""
+    return "%s %d" % (MONTHS[max(1, min(12, int(iso[5:7]))) - 1], int(iso[8:10]))
+
+
+def point_name(iso, hour):
+    """What a point of the spend graph is called: its hour, or its day (a week's
+    point carries its Monday, so it reads like a day)."""
+    return iso[11:16] if hour else nice_day(iso)
+
+
+def axis_marks(n):
+    """Which points of n get a label under the graph: up to five, evenly spread."""
+    if n <= 5:
+        return list(range(n))
+    for k in (5, 4, 3):
+        if (n - 1) % (k - 1) == 0:
+            return [i * (n - 1) // (k - 1) for i in range(k)]
+    return sorted(set(int(i * (n - 1) / 4.0 + 0.5) for i in range(5)))
+
+
+def overview_graphs(live):
+    """The Overview's line graphs as <template> elements, which the script in the
+    page puts in place: the spend graph of each period (ov-g-<period>) and a
+    small trend line for each measure (ov-s-<period>-<m>): drawn from the measure's
+    own series when the feed carries one with two or more steps of data, else from
+    the period before and now, when it has both."""
+    out = []
+    updated = (live or {}).get("updated") or ""
+    for key, _label in LIVE_PERIODS:
+        p = ((live or {}).get("periods") or {}).get(key)
+        if not p:
+            continue
+        hour = p["series_unit"] == "hour"
+        week = p["series_unit"] == "week"
+        series = p["series"]
+        if series:
+            values = [r["usd"] for r in series]
+            names = [point_name(r["t"], hour) for r in series]
+            mark = values.index(max(values)) if max(values) > 0 else None
+            title = "Line graph of spend by %s, %s" % (p["series_unit"], p["label"])
+            if mark is not None:
+                title += ", peaking %s %s" % ("at" if hour else "in the week of" if week else "on",
+                                              names[mark])
+            # under the graph a week reads like a day (Nov 9); in the readout it says what it is
+            said = ["Week of %s" % n if week else n for n in names]
+            # by day, with more than a week of days: the 7-day average as a dashed line
+            smooth = running_average(values) if not hour and not week and len(values) > 7 else None
+            if smooth:
+                title += ", with a dashed 7-day average"
+            svg = line_svg(values, ["%s: %s" % (n, fmt_usd2(v)) for n, v in zip(said, values)],
+                           title, mark=mark, avg=smooth)
+            # the scale beside the graph: the top line is the highest point, the base line is $0
+            top = max(values) if max(values) > 0 else 1.0
+            scale = "".join('<span style="top:%.1f%%">%s</span>' % (100.0 * y / 210.0, esc(axis_usd(v)))
+                            for y, v in ((16.0, top), (108.0, top / 2.0), (200.0, 0)))
+            axis = []
+            last = len(series) - 1
+            for i in axis_marks(len(series)):
+                name = names[i]
+                if week:
+                    # the last week is the one today is in
+                    if i == last and series[i]["t"][:10] <= updated[:10]:
+                        name = "Today"
+                elif i == last and series[i]["t"][:13 if hour else 10] == updated[:13 if hour else 10]:
+                    name = "Now" if hour else "Today"
+                axis.append('<span style="left:%.1f%%">%s</span>'
+                            % (line_x(i, len(series)) / 10.0, esc(name)))
+            out.append('<template id="ov-g-%s"><div class="lg-wrap"><div class="lg-plot">'
+                       '<div class="lg-y" aria-hidden="true">%s</div>%s</div><div class="lg-x" '
+                       'aria-hidden="true">%s</div></div></template>' % (key, scale, svg, "".join(axis)))
+        ft, ch, co = p["first_try"], p["cache_hit"], p["corrections"]
+        for mid, name, before, now, trend, pct in (
+                ("ft", "First-try edits", ft["prev_rate"], ft["rate"], ft["series"], True),
+                ("ch", "Cache hit", ch["prev_rate"], ch["rate"], ch["series"], True),
+                ("co", "Corrections", co["prev_count"], co["count"], co["series"], False)):
+            unit = "%" if pct else ""
+            steps = [None if v is None else v * 100 if pct else v for v in trend or []]
+            have = [v for v in steps if v is not None]
+            if len(have) > 1:
+                title = "%s over the period: from %d%s to %d%s" % (
+                    name, _half_up(have[0]), unit, _half_up(have[-1]), unit)
+                out.append('<template id="ov-s-%s-%s">%s</template>' % (key, mid, line_svg(
+                    steps, title=title, size=(200, 40), grid=False, area=False, hits=False,
+                    zero=False)))
+                continue
+            if before is None or now is None:
+                continue
+            a, b = (before * 100, now * 100) if pct else (before, now)
+            title = "%s: %d%s the period before, %d%s now" % (name, _half_up(a), unit,
+                                                              _half_up(b), unit)
+            out.append('<template id="ov-s-%s-%s">%s</template>' % (key, mid, line_svg(
+                [a, b], title=title, size=(200, 40), grid=False, area=False, hits=False, zero=False)))
+    return "".join(out)
+
+
 def card(dailies):
     if not dailies:
         return {"date": None, "items": [], "counts": {}}
@@ -2067,97 +2537,116 @@ def build_page(reports_dir, projects_dir=None, today=None, scan=True, ledger_pat
         cost_html = ('<div class="empty"><p class="empty-title">No cost data yet.</p>'
                      '<p>Costs appear after the next recap, which also records every day still '
                      'in your transcripts.</p></div>')
+    live = guarded(live_view, guarded(load_live), hide)
     data = {"dailies": dailies, "weeklies": weeklies,
-            "contextLine": CONTEXT_LINE, "cost": cost}
-    values = {"NEWEST": esc(newest), "ONE": one, "TRENDS": render_trends(trend, today),
+            "contextLine": CONTEXT_LINE, "cost": cost, "live": live}
+    name = (guarded(C.load_config) or {}).get("display_name") or C.DEFAULT_DISPLAY_NAME
+    values = {"NAME": esc(name), "NEWEST": esc(newest), "ONE": one, "TRENDS": render_trends(trend, today),
               "BASELINE": render_baseline(summary, details), "DATA": json_for_script(data),
-              "COST": cost_html, "PROGRESS": progress, "SETUP": setup, "EXCERPTS": excerpts}
-    page = re.sub(r"\{\{(NEWEST|ONE|TRENDS|BASELINE|DATA|COST|PROGRESS|SETUP|EXCERPTS)\}\}",
+              "COST": cost_html, "PROGRESS": progress, "SETUP": setup, "EXCERPTS": excerpts,
+              "GRAPHS": guarded(overview_graphs, live) or ""}
+    page = re.sub(r"\{\{(NAME|NEWEST|ONE|TRENDS|BASELINE|DATA|COST|PROGRESS|SETUP|EXCERPTS|GRAPHS)\}\}",
                   lambda m: values[m.group(1)], PAGE)
     return clean(page), card(dailies)
 
 
-PAGE = r"""<title>Agentic Coach</title>
+PAGE = r"""<title>{{NAME}}</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
 /* Layout: one left-aligned column, sticky name and tabs, summary rows first, evidence folded under each row. */
+/* Colours follow the page mockup (docs/mockups/PageMM.dc.html), light and dark.
+   --good, --warn and --crit are for words and are dark enough to read on a card; the
+   -mark ones are for dots, edges and bars. */
 :root {
-  --bg: #f2f5f7; --surface: #ffffff; --sunken: #e8edf1;
-  --ink: #17212b; --ink-2: #485664; --ink-3: #64717e; --line: #d3dbe2;
-  --accent: #17698a; --accent-ink: #ffffff; --accent-soft: #dcebf2;
-  --good: #1f7045; --good-soft: #dbefe3;
-  --warn: #8a5600; --warn-soft: #f7e9cf;
-  --crit: #ae2f27; --crit-soft: #f8dfdc;
-  --bar: #7fb0c5; --bar-now: #17698a;
-  --sans: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --r: 6px;
+  --bg: #f3f2ee; --surface: #fcfcfb; --sunken: #eeede8; --raised: #ffffff;
+  --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #7c7b75; --line: #dedcd5; --grid: #e9e7e1;
+  --accent: #2a78d6; --accent-ink: #ffffff; --accent-soft: #e6effb;
+  --good: #065206; --good-soft: rgba(12, 163, 12, 0.12); --good-mark: #0ca30c;
+  --warn: #7d590c; --warn-soft: rgba(250, 178, 25, 0.2); --warn-mark: #fab219;
+  --crit: #a32c2c; --crit-soft: rgba(208, 59, 59, 0.12); --crit-mark: #d03b3b;
+  --heat-mid: #eda100;
+  --bar: #9cc0ea; --bar-now: #2a78d6;
+  --pill: #0b0b0b; --pill-text: #fcfcfb; --hover: #eeede8;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --mono: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --code: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r: 10px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #11161b; --surface: #19212a; --sunken: #0c1115;
-    --ink: #e3e9ee; --ink-2: #b0bbc5; --ink-3: #8a97a4; --line: #2c3843;
-    --accent: #6ebbd7; --accent-ink: #0a1a22; --accent-soft: #1b3440;
-    --good: #6cc693; --good-soft: #163124;
-    --warn: #e2aa56; --warn-soft: #372a11;
-    --crit: #f08b81; --crit-soft: #3d1c19;
-    --bar: #3d7187; --bar-now: #6ebbd7;
+    --bg: #111110; --surface: #1a1a19; --sunken: #232321; --raised: #232321;
+    --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #8f8e85; --line: #33332f; --grid: #2a2a27;
+    --accent: #3987e5; --accent-ink: #ffffff; --accent-soft: #17304f;
+    --good: #0ca30c; --good-soft: rgba(12, 163, 12, 0.18); --good-mark: #0ca30c;
+    --warn: #fab219; --warn-soft: rgba(250, 178, 25, 0.16); --warn-mark: #fab219;
+    --crit: #ec6a6a; --crit-soft: rgba(208, 59, 59, 0.2); --crit-mark: #d03b3b;
+    --heat-mid: #c98500;
+    --bar: #25507f; --bar-now: #3987e5;
+    --pill: #f0efec; --pill-text: #1a1a19; --hover: #262624;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #11161b; --surface: #19212a; --sunken: #0c1115;
-  --ink: #e3e9ee; --ink-2: #b0bbc5; --ink-3: #8a97a4; --line: #2c3843;
-  --accent: #6ebbd7; --accent-ink: #0a1a22; --accent-soft: #1b3440;
-  --good: #6cc693; --good-soft: #163124;
-  --warn: #e2aa56; --warn-soft: #372a11;
-  --crit: #f08b81; --crit-soft: #3d1c19;
-  --bar: #3d7187; --bar-now: #6ebbd7;
+  --bg: #111110; --surface: #1a1a19; --sunken: #232321; --raised: #232321;
+  --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #8f8e85; --line: #33332f; --grid: #2a2a27;
+  --accent: #3987e5; --accent-ink: #ffffff; --accent-soft: #17304f;
+  --good: #0ca30c; --good-soft: rgba(12, 163, 12, 0.18); --good-mark: #0ca30c;
+  --warn: #fab219; --warn-soft: rgba(250, 178, 25, 0.16); --warn-mark: #fab219;
+  --crit: #ec6a6a; --crit-soft: rgba(208, 59, 59, 0.2); --crit-mark: #d03b3b;
+  --heat-mid: #c98500;
+  --bar: #25507f; --bar-now: #3987e5;
+  --pill: #f0efec; --pill-text: #1a1a19; --hover: #262624;
   color-scheme: dark;
 }
 *, *::before, *::after { box-sizing: border-box; }
-body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.5; }
+body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.4; font-variant-numeric: tabular-nums; -webkit-text-size-adjust: 100%; }
 body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
 h1, h2, h3, h4, h5, h6, p, ol, ul, dl, dd, figure, pre { margin: 0; }
 h1, h2, h3, h4 { text-wrap: balance; line-height: 1.25; }
 ol, ul { padding: 0; }
 a { color: var(--accent); }
-code, pre, .mono { font-family: var(--mono); font-size: 0.9em; }
+code, pre { font-family: var(--code); font-size: 0.9em; }
+.mono { font-family: var(--mono); font-size: 0.9em; }
 code { background: var(--sunken); border-radius: 3px; padding: 0.05em 0.3em; overflow-wrap: anywhere; }
 pre code { background: none; padding: 0; overflow-wrap: normal; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 button, select { font: inherit; color: inherit; }
 
-.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); }
-.wrap { max-width: 980px; margin-inline: auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
-.top .wrap { padding-block: 10px 0; display: flex; flex-direction: column; gap: 6px; }
-.brand { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
-.brand h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
-.brand .newest { color: var(--ink-3); font-size: 13px; font-variant-numeric: tabular-nums; }
-.tabs { display: flex; flex-wrap: wrap; gap: 0 2px; margin-left: -10px; }
-.tabs a { padding: 8px 10px; color: var(--ink-2); text-decoration: none; font-weight: 500; font-size: 14px; border-bottom: 2px solid transparent; white-space: nowrap; }
-.tabs a:hover { color: var(--ink); }
-.tabs a[aria-current="page"] { color: var(--accent); border-bottom-color: var(--accent); }
-main.wrap { padding-block: 16px 48px; display: flex; flex-direction: column; gap: 20px; }
-.onething { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; background: var(--accent-soft); border-radius: var(--r); padding: 10px 14px; }
-.one-label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); white-space: nowrap; }
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); }
+/* one column for every tab, header and tab bar included, so nothing moves on a tab switch */
+.wrap { max-width: 1320px; margin-inline: auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.top .wrap { padding-block: 16px 10px; display: flex; flex-direction: column; gap: 14px; }
+.brand { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 4px 16px; }
+.brand h1 { font-size: 17px; font-weight: 650; }
+.brand .newest { display: block; color: var(--ink-2); font-size: 12.5px; }
+.conn { display: none; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
+.conn.on { display: inline-flex; }
+.conn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good-mark); flex: none; }
+.conn.stale .dot { background: var(--warn-mark); }
+/* Tabs and periods are one kind of control: a row of buttons, the chosen one an inverted pill. */
+.tabs { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.tabs a { padding: 5px 11px; border-radius: 6px; color: var(--ink-2); text-decoration: none; font-weight: 550; font-size: 12.5px; white-space: nowrap; }
+.tabs a:hover { background: var(--hover); }
+.tabs a[aria-current="page"] { background: var(--pill); color: var(--pill-text); }
+main.wrap { padding-block: 4px 48px; display: flex; flex-direction: column; gap: 14px; }
+.onething { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; background: var(--accent-soft); border-radius: 8px; padding: 10px 14px; }
+.one-label { font-size: 12px; font-weight: 600; color: var(--accent); white-space: nowrap; }
 .one-text { flex: 1 1 260px; min-width: 0; font-weight: 500; }
 .view { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .view > div[id$="-root"] { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .view[hidden] { display: none; }
-.view-title { font-size: 20px; font-weight: 600; }
-.sub { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); margin-top: 8px; }
+.view-title { font-size: 17px; font-weight: 650; }
+.sub { font-size: 13px; font-weight: 600; color: var(--ink); margin-top: 8px; }
 .lede, .muted { color: var(--ink-2); max-width: 70ch; }
 .muted { color: var(--ink-3); font-size: 13px; }
 
 .daybar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .daybar .view-title { margin-right: auto; }
-.btn { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 5px 11px; min-height: 36px; cursor: pointer; font-size: 13px; font-weight: 500; }
-.btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn { background: var(--raised); border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; min-height: 32px; cursor: pointer; font-size: 12.5px; font-weight: 550; }
+.btn:hover:not(:disabled) { background: var(--hover); }
 .btn:disabled { color: var(--ink-3); cursor: default; opacity: 0.6; }
-.btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn[aria-pressed="true"] { background: var(--pill); border-color: var(--pill); color: var(--pill-text); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .chips .lab { font-size: 13px; color: var(--ink-3); margin-right: 2px; }
 .chips .btn { font-variant-numeric: tabular-nums; }
@@ -2172,11 +2661,12 @@ select.btn { padding-right: 6px; max-width: 100%; }
 .rank { font-family: var(--mono); font-size: 14px; color: var(--ink-3); font-variant-numeric: tabular-nums; padding-top: 1px; }
 .item-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .field { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.field .k { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.field .k { font-size: 12px; font-weight: 600; color: var(--ink-3); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .field .v { max-width: 78ch; overflow-wrap: anywhere; }
 .field.do .v { font-weight: 500; }
 .field.what .v { color: var(--ink-2); }
-.pill { display: inline-block; font-family: var(--sans); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; line-height: 1; padding: 4px 7px; border-radius: 999px; background: var(--sunken); color: var(--ink-2); white-space: nowrap; }
+.pill { display: inline-block; font-family: var(--sans); font-size: 11.5px; font-weight: 600; line-height: 1; padding: 4px 7px; border-radius: 999px; background: var(--sunken); color: var(--ink-2); white-space: nowrap; }
+.pill::first-letter { text-transform: uppercase; }
 .pill.repeat, .pill.medium, .pill.warn { background: var(--warn-soft); color: var(--warn); }
 .pill.worse, .pill.high, .pill.crit { background: var(--crit-soft); color: var(--crit); }
 .pill.better, .pill.fix { background: var(--good-soft); color: var(--good); }
@@ -2186,7 +2676,7 @@ details > summary { cursor: pointer; }
 .evidence > summary { font-size: 13px; color: var(--accent); font-weight: 500; width: fit-content; padding-block: 8px; }
 .evidence[open] > summary { margin-bottom: 10px; }
 .ev-body { display: flex; flex-direction: column; gap: 12px; }
-.sess { background: var(--bg); border-radius: var(--r); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.sess { background: var(--bg); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .sess-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; min-width: 0; }
 .sid { font-weight: 500; }
 .sess-head .proj { color: var(--ink-2); font-size: 13px; overflow-wrap: anywhere; min-width: 0; }
@@ -2202,7 +2692,7 @@ details > summary { cursor: pointer; }
 .ev-where { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: 13px; min-width: 0; }
 .ev-where .lab { color: var(--ink-3); font-size: 12px; }
 .ev-where code, td code, .finds code, .codebox pre code { font-size: 12px; }
-.evidence-slice { background: var(--bg); border-radius: var(--r); min-width: 0; }
+.evidence-slice { background: var(--bg); border-radius: 8px; min-width: 0; }
 .evidence-slice > summary { padding: 9px 12px; font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
 .evidence-note { color: var(--ink-3); font-size: 12px; margin: 0 12px 8px; }
 .evidence-slice.gone .evidence-note { margin-bottom: 0; padding-bottom: 10px; }
@@ -2245,7 +2735,7 @@ td.wide { min-width: 20ch; overflow-wrap: anywhere; }
 .prop-head { display: flex; gap: 10px; align-items: baseline; }
 .prop-head .pid { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--accent); }
 .prop-head h4 { font-size: 16px; font-weight: 600; min-width: 0; }
-.codebox { border: 1px solid var(--line); border-radius: var(--r); background: var(--sunken); min-width: 0; }
+.codebox { border: 1px solid var(--line); border-radius: 8px; background: var(--sunken); min-width: 0; }
 .codebar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 4px 4px 10px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--ink-3); }
 .codebar .btn { padding: 3px 9px; font-size: 12px; }
 .scroll { overflow-x: auto; max-width: 100%; }
@@ -2262,7 +2752,7 @@ td.wide { min-width: 20ch; overflow-wrap: anywhere; }
 .ch-title { font-size: 13px; font-weight: 600; }
 .readout { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; font-family: var(--mono); }
 svg.ch { display: block; width: 100%; height: auto; }
-.ch-grid { stroke: var(--line); stroke-width: 1; }
+.ch-grid { stroke: var(--grid); stroke-width: 1; }
 .ch-lab { fill: var(--ink-3); font-family: var(--mono); font-size: 9.5px; }
 .ch-hit { fill: transparent; }
 .ch-bar { fill: var(--bar); }
@@ -2275,8 +2765,8 @@ svg.ch { display: block; width: 100%; height: auto; }
 .ch-limit-lab { fill: var(--warn); font-family: var(--mono); font-size: 9.5px; font-weight: 500; }
 
 table { border-collapse: collapse; font-size: 13px; width: 100%; }
-th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--ink-3); font-weight: 600; font-size: 12px; white-space: nowrap; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--ink-3); font-weight: 550; font-size: 11.5px; white-space: nowrap; }
 td { font-variant-numeric: tabular-nums; min-width: 6ch; }
 table.num td, table.num th { white-space: nowrap; }
 td.n, th.n { text-align: right; white-space: nowrap; }
@@ -2309,7 +2799,7 @@ td a.sid { font-family: var(--mono); }
 .md .md-h4, .md .md-h5, .md .md-h6 { font-size: 14px; font-weight: 600; }
 .md ul, .md ol { padding-left: 22px; display: flex; flex-direction: column; gap: 4px; }
 .md li > ul, .md li > ol { margin-top: 4px; }
-.md pre { background: var(--sunken); border-radius: var(--r); padding: 10px; font-size: 13px; }
+.md pre { background: var(--sunken); border-radius: 8px; padding: 10px; font-size: 13px; }
 .md hr { border: 0; border-top: 1px solid var(--line); width: 100%; margin: 4px 0; }
 .md ol.patterns { list-style: none; padding: 0; gap: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
 .patterns > li { border-top: 1px solid var(--line); max-width: none; }
@@ -2324,9 +2814,138 @@ td a.sid { font-family: var(--mono); }
 .patterns details > ul { margin: 0 14px 12px 38px; padding-left: 16px; color: var(--ink-2); font-size: 14px; }
 .md li.fixline { list-style: none; margin-left: -16px; color: var(--ink); margin-top: 2px; }
 
+/* Overview (docs/mockups/PageMM.dc.html): a row of stat tiles, the spend graph beside what is
+   running and the coach's tips, then By activity beside Projects and MCP servers. */
+.tabrow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.seg { display: none; gap: 2px; padding: 2px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.ov-live .seg { display: inline-flex; }
+.seg button { border: 0; background: none; border-radius: 6px; padding: 5px 11px; min-width: 40px; font-size: 12.5px; font-weight: 550; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.seg button:hover { background: var(--hover); }
+.seg button[aria-pressed="true"] { background: var(--pill); color: var(--pill-text); }
+#overview-root.ov { display: flex; flex-direction: column; gap: 10px; }
+.ov-card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px 8px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ov-card .sub { margin-top: 0; }
+.ov-card [title] { cursor: help; }
+.ov-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 14px; padding: 0; }
+.ov-hint { font-size: 12px; font-weight: 400; color: var(--ink-3); margin-left: 8px; }
+.ov-note { font-size: 12px; color: var(--ink-3); }
+.is-good { color: var(--good); }
+.is-warn, .lvl-warn { color: var(--warn); }
+.is-crit, .lvl-crit { color: var(--crit); }
+.is-flat { color: var(--ink-3); }
+/* tiles: label, figure, one or two lines of detail. Six, three or two equal columns, so the
+   six figures fill one row from 1180px and a row never ends half empty; limits use the same grid. */
+.ov-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.ov-tiles.lims-1 .ov-lim { grid-column: span 2; }
+.ov-tiles.lims-3 .ov-lim:last-child { grid-column: span 2; }
+@media (min-width: 600px) {
+  .ov-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ov-tiles.lims-1 .ov-lim { grid-column: span 3; }
+  .ov-tiles.lims-3 .ov-lim:last-child { grid-column: auto; }
+  .ov-tiles.lims-4 .ov-lim:last-child { grid-column: span 3; }
+}
+@media (min-width: 1180px) {
+  .ov-tiles { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .ov-tiles.lims-1 .ov-lim { grid-column: span 6; }
+  .ov-tiles.lims-2 .ov-lim { grid-column: span 3; }
+  .ov-tiles.lims-3 .ov-lim { grid-column: span 2; }
+  .ov-tiles.lims-3 .ov-lim:last-child { grid-column: span 2; }
+  .ov-tiles.lims-4 .ov-lim:nth-last-child(n+3) { grid-column: span 2; }
+  .ov-tiles.lims-4 .ov-lim:last-child { grid-column: auto; }
+}
+.ov-tile { padding: 11px 13px 12px; gap: 0; }
+.ov-tile.warning { box-shadow: inset 3px 0 0 var(--warn-mark); }
+.ov-tile.critical { box-shadow: inset 3px 0 0 var(--crit-mark); }
+.ov-tile .k { font-size: 12px; color: var(--ink-2); }
+.ov-tile .v { font-size: 22px; font-weight: 620; letter-spacing: -0.01em; margin-top: 3px; line-height: 1.2; overflow-wrap: anywhere; }
+.ov-tile .v.words { font-size: 16px; line-height: 1.65; }
+.ov-tile .s { font-size: 12px; color: var(--ink-3); margin-top: 3px; overflow-wrap: anywhere; }
+.ov-tile .s b { font-weight: 600; }
+.ov-lim.warning .v { color: var(--warn); }
+.ov-lim.critical .v { color: var(--crit); }
+.ov-spark { margin-top: 6px; color: var(--accent); }
+.ov-spark.is-good { color: var(--good-mark); }
+.ov-spark.is-warn { color: var(--warn-mark); }
+.ov-spark .lg { height: 26px; }
+.ov-spark .lg-line { stroke: currentColor; stroke-width: 1.5; }
+.ov-spark .lg-hole { stroke: currentColor; stroke-width: 5; }
+.ov-spark .lg-ring { stroke-width: 7; }
+/* the graph beside the running sessions and tips */
+.ov-row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 10px; }
+.ov-graph .ov-gt { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+.ov-legend { display: flex; flex-wrap: wrap; gap: 3px 12px; font-size: 12px; color: var(--ink-2); }
+.ov-legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.ov-legend i { width: 12px; height: 3px; border-radius: 2px; background: var(--accent); flex: none; }
+.ov-legend i.avg { height: 0; background: none; border-top: 1.25px dashed var(--ink-2); border-radius: 0; }
+.lg-plot { position: relative; padding-left: 44px; }
+.lg-y { position: absolute; left: 0; top: 0; bottom: 0; width: 38px; font-size: 11px; color: var(--ink-3); }
+.lg-y span { position: absolute; right: 0; transform: translateY(-50%); white-space: nowrap; }
+.lg { display: block; width: 100%; height: 190px; overflow: visible; }
+.lg:focus-visible { outline-offset: 6px; }
+.lg * { vector-effect: non-scaling-stroke; }
+.lg-grid, .lg-base { stroke: var(--grid); stroke-width: 1; }
+.lg-area { display: none; }
+.lg-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.lg-avg { fill: none; stroke: var(--ink-2); stroke-width: 1.25; stroke-dasharray: 3 3; }
+/* a marker is a round line cap: a ring of the card's colour with a dot of the line's colour on it */
+.lg-ring, .lg-hole, .lg-dot { fill: none; stroke-linecap: round; }
+.lg-ring { stroke: var(--surface); stroke-width: 8; }
+.lg-hole { stroke: var(--accent); stroke-width: 6; }
+.lg-dot { stroke: var(--accent); stroke-width: 8; opacity: 0; }
+/* the spend graph marks its peak only */
+.ov-graph .lg-ring:not(.peak), .ov-graph .lg-ring:not(.peak) + .lg-hole { display: none; }
+.lg-area, .lg-line, .lg-avg, .lg-ring, .lg-hole { pointer-events: none; }
+.lg .b:hover .ch-hit, .lg .b.on .ch-hit { fill: var(--accent); fill-opacity: 0.08; }
+.lg .b:hover .lg-dot, .lg .b.on .lg-dot { opacity: 1; }
+/* a threshold: a dashed amber line with its figure on it, at the left of the plot */
+.lg-limit { stroke: var(--warn); stroke-width: 1.2; stroke-dasharray: 4 3; pointer-events: none; }
+.lg-limit-lab { position: absolute; left: 48px; transform: translateY(-50%); font-size: 11px; font-weight: 500; color: var(--warn); background: var(--surface); padding: 0 3px; border-radius: 2px; white-space: nowrap; pointer-events: none; }
+/* the Trends graphs: the spend graph's look, shorter to sit in a grid of cards */
+.chart.trend { padding: 10px 12px 6px; }
+.chart.trend .lg { height: 140px; }
+.lg-x { position: relative; height: 16px; margin: 4px 0 0 44px; font-size: 11px; color: var(--ink-3); }
+.lg-x span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.lg-x span:first-child { transform: none; }
+.lg-x span:last-child { transform: translateX(-100%); }
+.ov-run { display: flex; gap: 10px; align-items: center; border-left: 3px solid var(--good-mark); padding: 6px 10px; background: var(--sunken); border-radius: 6px; }
+.ov-run.run-warn { border-left-color: var(--warn-mark); }
+.ov-run.run-crit { border-left-color: var(--crit-mark); }
+.ov-run .who { flex: 1; min-width: 0; }
+.ov-run .t { font-size: 13px; font-weight: 550; overflow-wrap: anywhere; }
+.ov-run .m { font-size: 12px; color: var(--ink-2); }
+.ov-run .ctx { text-align: right; white-space: nowrap; }
+.ov-run .ctx .p { font-size: 15px; font-weight: 620; }
+.ov-run .ctx .m { color: var(--ink-3); }
+.ov-run.run-warn .ctx .p { color: var(--warn); }
+.ov-run.run-crit .ctx .p { color: var(--crit); }
+.ov-tips-h { margin-top: 6px; }
+.ov-tip { border-left: 3px solid var(--warn-mark); padding: 4px 10px; min-width: 0; }
+.ov-tip .t { font-size: 13px; font-weight: 550; overflow-wrap: anywhere; }
+.ov-tip .a { font-size: 12px; color: var(--ink-2); overflow-wrap: anywhere; }
+/* three tables; the first figure of each row sits over a thin heat bar */
+.ov-row3 { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 10px; align-items: start; }
+.ov-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.ov-acts, .ov-projects, .ov-mcp { padding-bottom: 6px; }
+.ov-t { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.ov-t th, .ov-t td { border: 0; border-top: 1px solid var(--grid); padding: 5px 0 5px 12px; text-align: right; vertical-align: top; white-space: nowrap; min-width: 0; font-size: 12.5px; }
+.ov-t thead th { border-top: 0; padding-block: 4px; font-size: 11.5px; font-weight: 550; color: var(--ink-3); }
+.ov-t thead th.main { color: var(--ink); }
+.ov-t th:first-child { text-align: left; padding-left: 0; }
+.ov-t tbody th { color: var(--ink); font-weight: 400; white-space: normal; overflow-wrap: anywhere; width: 99%; }
+.ov-t td.mid { color: var(--ink-2); }
+.ov-t td.dim { color: var(--ink-3); }
+.ov-t td.barcol { width: 110px; min-width: 110px; }
+/* Heat bar: one accent to amber to red gradient laid across the whole 110px track and clipped by the bar. */
+.hb { width: 110px; height: 4px; border-radius: 2px; background: var(--grid); margin: 3px 0 0 auto; overflow: hidden; }
+.hb i { display: block; height: 4px; border-radius: 2px; background: linear-gradient(90deg, var(--accent), var(--heat-mid), var(--crit-mark)) 0 0 / 110px 4px no-repeat; }
+@media (max-width: 900px) {
+  .ov-row3 { grid-template-columns: minmax(0, 1fr); }
+}
+
 @media (max-width: 1024px) {
   /* finger-sized targets wherever a thumb may be the pointer */
-  .tabs a { padding-block: 12px; }
+  .seg button { min-height: 44px; }
+  .tabs a { padding-block: 13px; }
   .btn { min-height: 44px; padding-inline: 14px; }
   .codebar .btn { min-height: 44px; }
   th button.sort { min-height: 44px; line-height: 44px; min-width: 44px; }
@@ -2339,14 +2958,24 @@ td a.sid { font-family: var(--mono); }
   .headline { grid-template-columns: minmax(0, 1fr); }
   .items > li { grid-template-columns: 22px minmax(0, 1fr); padding: 12px; }
   .patterns details > ul { margin-left: 14px; }
+  /* a table wider than a phone scrolls sideways inside its card */
+  .ov-acts, .ov-projects, .ov-mcp { overflow-x: auto; }
+  .ov-t td.barcol { width: 84px; min-width: 84px; }
+  .hb { width: 84px; }
+  .hb i { background-size: 84px 4px; }
+  .lg-plot { padding-left: 38px; }
+  .lg-x { margin-left: 38px; }
+  .lg-limit-lab { left: 42px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
 </style>
 
 <header class="top">
   <div class="wrap">
-    <div class="brand"><h1>Agentic Coach</h1><span class="newest">{{NEWEST}}</span></div>
+    <div class="brand"><div><h1>{{NAME}}</h1><span class="newest">{{NEWEST}}</span></div><span class="conn" id="ov-conn"><i class="dot"></i><span></span></span></div>
+    <div class="tabrow">
     <nav class="tabs" aria-label="Views">
+      <a href="#overview" id="tab-overview">Overview</a>
       <a href="#today" id="tab-today">Today</a>
       <a href="#week" id="tab-week">This week</a>
       <a href="#cost" id="tab-cost">Cost</a>
@@ -2355,11 +2984,23 @@ td a.sid { font-family: var(--mono); }
       <a href="#setup" id="tab-setup">Setup</a>
       <a href="#baseline" id="tab-baseline">Baseline</a>
     </nav>
+    <div class="seg" id="ov-period" role="group" aria-label="Period">
+      <button type="button" id="ov-p-today" aria-pressed="false">Today</button>
+      <button type="button" id="ov-p-week" aria-pressed="false">7 days</button>
+      <button type="button" id="ov-p-month" aria-pressed="false">30 days</button>
+      <button type="button" id="ov-p-all" aria-pressed="false">All time</button>
+    </div>
+    </div>
   </div>
 </header>
 
 <main class="wrap">
   {{ONE}}
+  <section class="view" id="view-overview" aria-labelledby="tab-overview">
+    <div id="overview-root">
+      <div class="empty"><p class="empty-title">No live numbers yet.</p><p>This fills in after the coach next records your usage.</p></div>
+    </div>
+  </section>
   <section class="view" id="view-today" aria-labelledby="tab-today">
     <div id="today-root">
       <div class="empty"><p class="empty-title">No daily recap yet.</p><p>The first one arrives after the next daily run.</p></div>
@@ -2393,14 +3034,17 @@ td a.sid { font-family: var(--mono); }
   </section>
 </main>
 {{EXCERPTS}}
+{{GRAPHS}}
 
 <script type="application/json" id="coach-data">{{DATA}}</script>
 <script>
 (function () {
   "use strict";
   var D = JSON.parse(document.getElementById("coach-data").textContent);
-  var VIEWS = ["today", "week", "cost", "trends", "progress", "setup", "baseline"];
+  var VIEWS = ["overview", "today", "week", "cost", "trends", "progress", "setup", "baseline"];
   var dayIdx = 0, weekIdx = 0, costIdx = 0;
+  var LIVE = D.live || null, liveOk = !!(LIVE && !(LIVE.version > 1));
+  var PERIODS = ["today", "week", "month", "all"], period = "today";
 
   function h(tag, attrs) {
     var e = document.createElement(tag), i, c, k;
@@ -2824,39 +3468,368 @@ td a.sid { font-family: var(--mono); }
     if (C.oneAccount) root.appendChild(h("p", { class: "muted", text: "Showing one account only." }));
   }
 
+  /* A graph's readout follows the pointer; a line graph also takes focus and the arrow keys. */
+  function bindReadout(fig) {
+    var out = fig.querySelector(".readout"), svg = fig.querySelector("svg[tabindex]");
+    var gs = svg ? svg.querySelectorAll("g.b") : [], at = -1;
+    if (!out) { return; }
+    function mark(i) {
+      if (at >= 0 && gs[at]) { gs[at].classList.remove("on"); }
+      at = i;
+      if (i >= 0 && gs[i]) { gs[i].classList.add("on"); out.textContent = gs[i].getAttribute("data-r"); }
+      else { out.textContent = out.getAttribute("data-default"); }
+    }
+    function over(ev) {
+      var g = ev.target.closest ? ev.target.closest("g.b") : null;
+      if (!g) { return; }
+      if (svg) { mark(Array.prototype.indexOf.call(gs, g)); } else { out.textContent = g.getAttribute("data-r"); }
+    }
+    fig.addEventListener("pointermove", over);
+    fig.addEventListener("pointerdown", over);
+    fig.addEventListener("pointerleave", function () {
+      if (svg) { mark(-1); } else { out.textContent = out.getAttribute("data-default"); }
+    });
+    if (svg && gs.length) {
+      svg.addEventListener("focus", function () { if (at < 0) { mark(gs.length - 1); } });
+      svg.addEventListener("blur", function () { mark(-1); });
+      svg.addEventListener("keydown", function (ev) {
+        var step = ev.key === "ArrowLeft" ? -1 : ev.key === "ArrowRight" ? 1 : 0;
+        if (!step) { return; }
+        ev.preventDefault();
+        mark(Math.max(0, Math.min(gs.length - 1, (at < 0 ? gs.length - 1 : at) + step)));
+      });
+    }
+  }
+
+  /* Overview: the live feed, one period at a time. Times are printed as the feed wrote them. */
+  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  /* All time has no period before it, so it has no entry here and no change line is drawn. */
+  var BEFORE = { today: "yesterday", week: "the 7 days before", month: "the 30 days before" };
+  var TIPS = {
+    pace: "Pace is the share of the limit used minus the share of its window that has passed.",
+    ft: "First-try edits is the share of turns that edited files and needed no retry or correction afterwards.",
+    ch: "Cache hit is the share of input tokens read from the prompt cache instead of being sent again at full price.",
+    co: "Corrections counts your prompts that open by correcting the answer before.",
+    share: "Share is this row's part of the cost of the period.",
+    cost: "Cost is API-equivalent at list prices, not a bill.",
+    turns: "Turns counts your prompts answered in this kind of work.",
+    first: "First try is the share of this activity's editing turns that needed no retry.",
+    sessions: "Sessions counts the sessions that ran in this project.",
+    mcp: "MCP stands for Model Context Protocol, the way Claude Code connects to outside tools and services.",
+    calls: "Calls counts every time a tool of this server was used.",
+    tools: "Tools counts the different tools of this server that were used.",
+    errors: "Errors counts the calls to this server that failed."
+  };
+  function isNum(x) { return typeof x === "number" && isFinite(x); }
+  function isoParts(s) {
+    var m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)/.exec(s || "");
+    return m ? { y: +m[1], mo: +m[2], d: +m[3], hm: m[4] + ":" + m[5] } : null;
+  }
+  function monDay(s) { var p = isoParts(s); return p ? MON[Math.max(1, Math.min(12, p.mo)) - 1] + " " + p.d : ""; }
+  function clock(s) { var p = isoParts(s); return p ? p.hm : ""; }
+  function asOf(s) { return isoParts(s) ? "As of " + monDay(s) + ", " + clock(s) : null; }
+  function span(ms) {
+    var m = Math.max(0, Math.round(ms / 60000));
+    if (m >= 1440) { return Math.floor(m / 1440) + "d " + Math.floor((m % 1440) / 60) + "h"; }
+    if (m >= 60) { return Math.floor(m / 60) + "h " + (m % 60) + "m"; }
+    return m + "m";
+  }
+  function about(ms) {
+    var m = Math.max(1, Math.round(ms / 60000));
+    return m >= 2880 ? Math.round(m / 1440) + "d" : m >= 60 ? Math.round(m / 60) + "h" : m + "m";
+  }
+  function money(x) { return "$" + Math.max(0, x).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function whole(n) { return Math.round(n).toLocaleString("en-US"); }
+  function pct(r) { return Math.round(r * 100) + "%"; }
+  function points(r) { return isNum(r) ? Math.round(r * 100) : null; }
+  function graft(id) { var t = document.getElementById(id); return t && t.content ? t.content.cloneNode(true) : null; }
+  function clockSec(s) { var m = /T(\d\d:\d\d:\d\d)/.exec(s || ""); return m ? m[1] : clock(s); }
+  /* Beside the name: a green dot and "Live" while the numbers are under 15 minutes old. */
+  function liveLine() {
+    var el = document.getElementById("ov-conn"), at = Date.parse((LIVE && LIVE.updated) || "");
+    if (!el || !liveOk || isNaN(at)) { return; }
+    var age = Date.now() - at, fresh = age <= 15 * 60000;
+    el.className = "conn on" + (fresh ? "" : " stale");
+    el.lastChild.textContent = fresh ? "Live \u00b7 updated " + clockSec(LIVE.updated)
+      : "Not live \u00b7 updated " + monDay(LIVE.updated) + " at " + clock(LIVE.updated);
+  }
+  function ovCard(cls, title, hint, tip) {
+    var name = h("h3", { class: "sub", text: title, title: tip });
+    if (hint) { name.appendChild(h("span", { class: "ov-hint", text: hint })); }
+    return h("section", { class: "ov-card " + cls }, h("div", { class: "ov-head" }, name));
+  }
+  /* How a figure moved against the period before: the words that say so (lead, coloured)
+     and the rest of the line. up: true when more is better. */
+  function change(now, prev, up, unit) {
+    if (!isNum(now) || !isNum(prev) || !BEFORE[period]) { return null; }
+    var d = Math.round(now - prev);
+    if (!d) { return { cls: "is-flat", lead: "", rest: "same as " + BEFORE[period] }; }
+    return { cls: (d > 0) === up ? "is-good" : "is-warn",
+      lead: (d > 0 ? "Up " : "Down ") + Math.abs(d) + (unit || ""), rest: "on " + BEFORE[period] };
+  }
+  function sLine(text) { return text ? h("div", { class: "s", text: text }) : null; }
+  function chgLine(c, plain) {
+    if (!c) { return null; }
+    return h("div", { class: "s" }, c.lead ? h("b", { class: plain ? null : c.cls, text: c.lead }) : null, (c.lead ? " " : "") + c.rest);
+  }
+  /* All time: these figures only reach back as far as the transcripts still on this Mac. */
+  function detailNote(p) { return p.detail_from ? h("div", { class: "s ov-detail", text: "Detail from " + p.detail_from }) : null; }
+  function withNote(card, p) {
+    if (p.detail_from) { card.appendChild(h("div", { class: "ov-note ov-detail", text: "Detail from " + p.detail_from })); }
+    return card;
+  }
+  /* One tile: label, figure (or a few words where there is no figure), lines of detail. */
+  function tile(cls, k, v, tip, subs) {
+    var t = h("section", { class: "ov-card ov-tile" + (cls ? " " + cls : "") },
+      h("div", { class: "k", text: k, title: tip }),
+      h("div", { class: "v" + (/\d/.test(v) ? "" : " words"), text: v }));
+    (subs || []).forEach(function (s) { if (s) { t.appendChild(s); } });
+    return t;
+  }
+  function spendName(p) {
+    var l = p.label || "";
+    return period === "today" ? "Spend today" : "Spend, " + l.charAt(0).toLowerCase() + l.slice(1);
+  }
+  function peakWords(p) {
+    var k = p.peak;
+    if (!k || !isNum(k.tokens) || !(k.tokens > 0) || !isoParts(k.t)) { return null; }
+    return "peak " + tok(k.tokens) + (p.series_unit === "hour" ? " at " + clock(k.t)
+      : p.series_unit === "week" ? " in the week of " + monDay(k.t) : " on " + monDay(k.t));
+  }
+  /* Limits used: one tile per limit, with its pace and when it resets. */
+  function ovLimitTiles() {
+    var L = LIVE.limits || {}, rows = L.rows || [], now = Date.now(), seen = asOf(L.as_of || LIVE.updated);
+    return rows.map(function (r) {
+      var at = Date.parse(r.resets_at || ""), over = at <= now, subs = [];   /* reset since: the pace no longer holds */
+      if (isNum(r.pace_pct) && !over) {
+        var pc = Math.round(r.pace_pct), out = Date.parse(r.runs_out_at || ""), text, cls;
+        if (pc < 0) { text = -pc + "% in reserve"; cls = "is-good"; }
+        else if (!pc) { text = "On pace"; cls = "is-flat"; }
+        else {
+          text = pc + "% over pace" + (!isNaN(out) && out > now ? ", runs out in about " + about(out - now) : "");
+          cls = r.level === "crit" ? "is-crit" : "is-warn";
+        }
+        subs.push(h("div", { class: "s" }, h("b", { class: cls, text: text, title: TIPS.pace })));
+      }
+      if (!isNaN(at)) {
+        var when = monDay(r.resets_at) + " at " + clock(r.resets_at);
+        subs.push(sLine(at <= now ? "Reset " + when : at - now < 864e5 ? "Resets in " + span(at - now) : "Resets " + when));
+      }
+      return tile("ov-lim" + (r.level === "crit" ? " critical" : r.level === "warn" ? " warning" : ""),
+        "Limit used, " + r.label + (r.level === "crit" ? ", near limit" : ""), Math.round(r.used_pct) + "%", seen, subs);
+    });
+  }
+  /* The limit tiles go in the tiles' grid on a row of their own; the grid is told how many
+     there are, so they span whole columns and fill that row (two limits: three columns each). */
+  function limitRow(box) {
+    var lims = ovLimitTiles();
+    lims.forEach(function (t) { box.appendChild(t); });
+    if (lims.length) { box.className += " lims-" + Math.min(lims.length, 4); }
+  }
+  function ovTiles(p) {
+    var box = h("div", { class: "ov-tiles" }), cost = null;
+    var ft = p.first_try || {}, ch = p.cache_hit || {}, co = p.corrections || {};
+    if (isNum(p.cost_usd) && isNum(p.prev_cost_usd) && p.prev_cost_usd > 0) {
+      cost = change(100 * p.cost_usd / p.prev_cost_usd, 100, false, "%");
+    }
+    /* a day still running is not judged against a whole day, and more spend is not a fault: no colour then */
+    box.appendChild(tile("ov-cost", spendName(p), isNum(p.cost_usd) ? money(p.cost_usd) : "No data", TIPS.cost,
+      [sLine("API-equivalent, not a bill"), chgLine(cost, period === "today" || (cost && cost.cls === "is-warn"))]));
+    box.appendChild(tile("ov-calls", "Calls", isNum(p.calls) ? whole(p.calls) : "No data", null,
+      [isNum(p.sessions) ? sLine("in " + whole(p.sessions) + (p.sessions === 1 ? " session" : " sessions")) : null, detailNote(p)]));
+    box.appendChild(tile("ov-tokens", "Tokens", isNum(p.tokens) ? tok(p.tokens) : "No data", null, [sLine(peakWords(p))]));
+    [["ft", "First-try edits", isNum(ft.rate) ? pct(ft.rate) : "No edits", points(ft.rate), points(ft.prev_rate), true],
+     ["ch", "Cache hit", isNum(ch.rate) ? pct(ch.rate) : "No data", points(ch.rate), points(ch.prev_rate), true],
+     ["co", "Corrections", isNum(co.count) ? whole(co.count) : "No data", co.count, co.prev_count, false]].forEach(function (m) {
+      var chg = change(m[3], m[4], m[5]), spark = graft("ov-s-" + period + "-" + m[0]);
+      box.appendChild(tile("ov-how" + (chg && chg.cls === "is-warn" ? " warning" : ""), m[1], m[2], TIPS[m[0]],
+        [chgLine(chg), detailNote(p), spark ? h("div", { class: "ov-spark " + (chg ? chg.cls : "") }, spark) : null]));
+    });
+    limitRow(box);
+    return box;
+  }
+  function dayBefore(s) {
+    var u = isoParts(LIVE.updated), i;
+    if (!u) { return null; }
+    var d = new Date(u.y, u.mo - 1, u.d - 1);
+    var key = d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2);
+    for (i = 0; i < s.length; i++) { if (s[i].t.slice(0, 10) === key) { return s[i].usd; } }
+    return null;
+  }
+  function ovGraph(p) {
+    var hour = p.series_unit === "hour", week = p.series_unit === "week", s = p.series || [], sum = 0, peak = -1, said = [];
+    function name(r) { return hour ? clock(r.t) : monDay(r.t); }
+    s.forEach(function (r, i) { sum += r.usd; if (r.usd > 0 && (peak < 0 || r.usd > s[peak].usd)) { peak = i; } });
+    if (s.length) { said.push("average " + money(sum / s.length)); }
+    if (peak >= 0) { said.push("peak " + money(s[peak].usd) + (hour ? " at " : week ? " in the week of " : " on ") + name(s[peak])); }
+    var y = hour ? p.prev_cost_usd : week ? null : dayBefore(s);
+    if (isNum(y)) { said.push("yesterday " + money(y)); }
+    var last = s.length ? (week ? "Week of " : "") + name(s[s.length - 1]) + ": " + money(s[s.length - 1].usd) : "";
+    var plot = graft("ov-g-" + period);
+    var legend = h("div", { class: "ov-legend", "aria-hidden": "true" }, h("span", null, h("i"), "Spend"));
+    if (plot && plot.querySelector(".lg-avg")) { legend.appendChild(h("span", null, h("i", { class: "avg" }), "7-day average")); }
+    var title = h("h3", { class: "sub", text: hour ? "Spend by hour" : week ? "Spend by week" : "Spend by day" });
+    if (said.length) { title.appendChild(h("span", { class: "ov-hint", text: said.join(", ") })); }
+    var fig = h("figure", { class: "ov-card ov-graph" },
+      h("figcaption", { class: "ov-head" },
+        h("div", { class: "ov-gt" }, title,
+          h("span", { class: "readout", "data-default": last, "aria-live": "polite", text: last })),
+        legend),
+      plot || h("p", { class: "muted", text: "No spend recorded in this period." }));
+    bindReadout(fig);
+    return fig;
+  }
+  /* Running now, with the coach's tips under it in the same card. */
+  function ovRunTips() {
+    var runs = LIVE.running || [], upd = Date.parse(LIVE.updated || ""), tips = LIVE.tips || [];
+    var c = ovCard("ov-running", "Running now", runs.length ? plural(runs.length, "session") : null);
+    if (!runs.length) { c.appendChild(h("p", { class: "muted", text: "Nothing is running." })); }
+    runs.forEach(function (r) {
+      var ran = upd - Date.parse(r.started || ""), sub = [], left = [];
+      if (r.model) { sub.push(r.model); }
+      if (ran >= 0) { sub.push((sub.length ? "running " : "Running ") + span(ran)); }
+      var lvl = r.level === "crit" || r.level === "warn" ? r.level : "";
+      if (isNum(r.context_left_tokens)) { left.push(tok(r.context_left_tokens) + " left"); }
+      if (lvl) { left.push(lvl === "crit" ? "context nearly full" : "context filling up"); }
+      c.appendChild(h("div", { class: "ov-run" + (lvl ? " run-" + lvl : "") },
+        h("div", { class: "who" }, h("div", { class: "t", text: r.project + (r.branch ? ", " + r.branch : "") }),
+          sub.length ? h("div", { class: "m", text: sub.join(", ") }) : null),
+        isNum(r.context_pct) || left.length ? h("div", { class: "ctx" },
+          isNum(r.context_pct) ? h("div", { class: "p", text: Math.round(r.context_pct) + "% context" }) : null,
+          left.length ? h("div", { class: "m", text: left.join(", ") }) : null) : null));
+    });
+    c.appendChild(h("h3", { class: "sub ov-tips-h", text: "Coach tips" }));
+    if (!tips.length) { c.appendChild(h("p", { class: "muted", text: "No tips right now." })); }
+    tips.forEach(function (t) {
+      c.appendChild(h("div", { class: "ov-tip" }, h("div", { class: "t", text: t.title }),
+        t.advice ? h("div", { class: "a", text: t.advice }) : null));
+    });
+    return c;
+  }
+  /* A table whose first figure sits over a thin heat bar. first: the name column's heading;
+     heads: [label, tooltip]; cells(row): [text, class]. */
+  function ovTable(cls, title, tip, first, heads, rows, cells, none) {
+    var c = ovCard(cls, title, null, tip);
+    if (!rows || !rows.length) { c.appendChild(h("p", { class: "muted", text: none })); return c; }
+    var head = h("tr", { role: "row" }, h("th", { scope: "col", role: "columnheader", text: first }));
+    var body = h("tbody", { role: "rowgroup" });
+    heads.forEach(function (x, i) {
+      head.appendChild(h("th", { scope: "col", role: "columnheader", class: i ? null : "main", text: x[0], title: x[1] }));
+    });
+    rows.forEach(function (r) {
+      var tr = h("tr", { role: "row" }, h("th", { scope: "row", role: "rowheader", text: r.name }));
+      cells(r).forEach(function (x, i) {
+        var td = h("td", { role: "cell", class: x[1] + (i ? "" : " barcol") }, h("div", { text: x[0] }));
+        if (!i) { td.appendChild(h("div", { class: "hb", "aria-hidden": "true" }, r.heat ? h("i", { style: "width:" + r.heat + "%" }) : null)); }
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    });
+    c.appendChild(h("table", { class: "ov-t", role: "table" }, h("thead", { role: "rowgroup" }, head), body));
+    return c;
+  }
+  function num(v, fmt) { return isNum(v) ? fmt(v) : ""; }
+  function ovTables(p) {
+    return h("div", { class: "ov-row3" },
+      withNote(ovTable("ov-acts", "By activity", null, "Activity",
+        [["Cost", TIPS.cost], ["Turns", TIPS.turns], ["First try", TIPS.first], ["Share", TIPS.share]], p.activities,
+        function (r) {
+          return [[num(r.usd, money), "main"], [num(r.turns, whole), "mid"],
+            [isNum(r.first_try) ? pct(r.first_try) : "No edits", isNum(r.first_try) ? "mid" : "dim"], [num(r.share, pct), "dim"]];
+        }, "No activity in this period"), p),
+      h("div", { class: "ov-col" },
+        ovTable("ov-projects", "Projects", null, "Project",
+          [["Cost", TIPS.cost], ["Sessions", TIPS.sessions], ["Share", TIPS.share]], p.projects,
+          function (r) { return [[num(r.usd, money), "main"], [num(r.sessions, whole), "mid"], [num(r.share, pct), "dim"]]; },
+          "No projects in this period"),
+        withNote(ovTable("ov-mcp", "MCP servers", TIPS.mcp, "Server",
+          [["Calls", TIPS.calls], ["Tools", TIPS.tools], ["Errors", TIPS.errors]], p.mcp_servers,
+          function (r) {
+            return [[num(r.calls, whole), "main"], [num(r.tools, whole), "mid"], [num(r.errors, whole), r.errors ? "is-warn" : "dim"]];
+          }, "No MCP calls in this period"), p)));
+  }
+  function renderOverview() {
+    var root = document.getElementById("overview-root");
+    if (!LIVE) { return; }
+    root.textContent = "";
+    if (!liveOk) {
+      root.appendChild(emptyBox("Update the coach", "These numbers were written by a newer coach than the one that built this page."));
+      return;
+    }
+    var p = (LIVE.periods || {})[period], row = h("div", { class: "ov-row2" });
+    root.className = "ov";
+    if (p) { root.appendChild(ovTiles(p)); }
+    else {
+      /* no figures for this period: the limits still stand, and so does what is running */
+      var lims = h("div", { class: "ov-tiles" });
+      limitRow(lims);
+      if (lims.childNodes.length) { root.appendChild(lims); }
+      var none = emptyBox("No data for this period.", "Pick another period.");
+      none.className += " ov-nodata";
+      root.appendChild(none);
+    }
+    if (p) { row.appendChild(ovGraph(p)); }
+    row.appendChild(ovRunTips());
+    root.appendChild(row);
+    if (p) { root.appendChild(ovTables(p)); }
+  }
+  function setPeriod(p, keep) {
+    if (PERIODS.indexOf(p) < 0) { return; }
+    period = p;
+    PERIODS.forEach(function (n) {
+      document.getElementById("ov-p-" + n).setAttribute("aria-pressed", n === p ? "true" : "false");
+    });
+    try { renderOverview(); } catch (err) {
+      /* a feed the page cannot draw never takes the other views down with it */
+      var root = document.getElementById("overview-root");
+      root.className = "";
+      root.textContent = "";
+      root.appendChild(emptyBox("Update the coach", "These numbers could not be drawn by this page."));
+    }
+    try { localStorage.setItem("coach.period", p); } catch (e) { /* storage is optional */ }
+    if (keep) {
+      try { history.replaceState(null, "", "#overview/" + p); } catch (e2) { /* the address is optional */ }
+    }
+  }
+  PERIODS.forEach(function (n) {
+    document.getElementById("ov-p-" + n).addEventListener("click", function () { setPeriod(n, true); });
+  });
+
+  function stored(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
   function show(v) {
     VIEWS.forEach(function (n) {
       document.getElementById("view-" + n).hidden = n !== v;
       var t = document.getElementById("tab-" + n);
       if (n === v) { t.setAttribute("aria-current", "page"); } else { t.removeAttribute("aria-current"); }
     });
-    try { localStorage.setItem("coach.tab", v); } catch (e) { /* storage is optional */ }
+    document.documentElement.classList.toggle("ov-live", v === "overview" && liveOk);
+    try { localStorage.setItem("coach.view", v); } catch (e) { /* storage is optional */ }
   }
+  /* The address wins (#cost, #overview/week, #overview/all), then the view and period last open. With
+     nothing to go on the page opens on the Overview, or on Today when there is no live feed. */
   function route() {
-    var v = (location.hash || "").slice(1);
+    var hash = (location.hash || "").slice(1).split("/"), v = hash[0];
     if (VIEWS.indexOf(v) < 0) {
-      try { v = localStorage.getItem("coach.tab"); } catch (e) { v = null; }
+      v = stored("coach.view");
+      if (v === "overview" && !liveOk) { v = null; }
     }
-    show(VIEWS.indexOf(v) < 0 ? "today" : v);
+    if (VIEWS.indexOf(v) < 0) { v = liveOk ? "overview" : "today"; }
+    var p = hash[0] === "overview" && PERIODS.indexOf(hash[1]) >= 0 ? hash[1] : stored("coach.period");
+    setPeriod(PERIODS.indexOf(p) < 0 ? period : p);
+    show(v);
   }
   VIEWS.forEach(function (n) {
     document.getElementById("tab-" + n).addEventListener("click", function () { show(n); });
   });
 
-  Array.prototype.forEach.call(document.querySelectorAll("figure.chart"), function (fig) {
-    var out = fig.querySelector(".readout");
-    function over(ev) {
-      var g = ev.target.closest ? ev.target.closest("g.b") : null;
-      if (g) { out.textContent = g.getAttribute("data-r"); }
-    }
-    fig.addEventListener("pointermove", over);
-    fig.addEventListener("pointerdown", over);
-    fig.addEventListener("pointerleave", function () { out.textContent = out.getAttribute("data-default"); });
-  });
+  Array.prototype.forEach.call(document.querySelectorAll("figure.chart"), bindReadout);
 
   renderToday();
   renderWeek();
   renderCost();
+  liveLine();
+  /* a page left open stops saying "Live" once its numbers are over 15 minutes old */
+  if (typeof setInterval === "function") { setInterval(liveLine, 30000); }
   window.addEventListener("hashchange", route);
   route();
 })();

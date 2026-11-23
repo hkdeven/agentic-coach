@@ -13,6 +13,14 @@ It looks at:
   the old checkout named in an old hook or task, for reports left there
 
 Usage: python3 coach/setup_check.py
+
+The live feed runner (optional, macOS): a per-user LaunchAgent that runs
+`live.py write` once a minute, so <coach home>/live.json always holds fresh
+numbers (docs/LIVE-FEED.md). These three print JSON; install and uninstall are the only
+commands in this file that change anything, and only after the person said yes:
+  python3 coach/setup_check.py live-agent status
+  python3 coach/setup_check.py live-agent install
+  python3 coach/setup_check.py live-agent uninstall
 """
 import json
 import os
@@ -154,6 +162,247 @@ def _old_reports(checkout):
     return out
 
 
+# ---------- the once-a-minute runner of the live feed ----------
+
+LIVE_LABEL = "com.agentic-coach.live"
+LIVE_INTERVAL_SEC = 60
+LIVE_LAUNCHER_NAME = "coach_live.py"
+LIVE_PATH_NOTE = "live.path"
+LIVE_ERR_LOG = "live.err.log"
+
+LIVE_LAUNCHER = '''#!/usr/bin/env python3
+# agentic-coach live feed launcher, written by "setup_check.py live-agent install".
+# The plugin folder moves with every plugin version, so the LaunchAgent points
+# here and this file finds the current plugin. "live-agent uninstall" removes it.
+import os
+import sys
+
+
+def _ok(root):
+    return (os.path.isfile(os.path.join(root, "coach", "live.py"))
+            and not os.path.exists(os.path.join(root, ".orphaned_at")))
+
+
+def _root():
+    here = os.path.dirname(os.path.abspath(__file__))
+    note = os.path.join(here, "live.path")
+    try:
+        with open(note) as fh:
+            root = fh.read().strip()
+        if root and _ok(root):
+            return root
+    except OSError:
+        pass
+    import glob
+    claude = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    found = [os.path.dirname(os.path.dirname(p)) for p in glob.glob(os.path.join(
+        claude, "plugins", "cache", "*", "agentic-coach", "*", "coach", "live.py"))]
+    found = [r for r in found if _ok(r)]
+    if not found:
+        return None
+
+    def rank(root):
+        nums = []
+        for bit in os.path.basename(root).split("."):
+            digits = "".join(ch for ch in bit if ch.isdigit())
+            nums.append(int(digits) if digits else 0)
+        return (nums, os.path.getmtime(root))
+
+    found.sort(key=rank)
+    try:
+        with open(note, "w") as fh:
+            fh.write(found[-1] + "\\n")
+    except OSError:
+        pass
+    return found[-1]
+
+
+try:                    # the error log is ours: keep it small
+    log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "live.err.log")
+    if os.path.getsize(log) > 200000:
+        open(log, "w").close()
+except OSError:
+    pass
+root = _root()
+if not root:
+    sys.stderr.write("coach: the agentic-coach plugin was not found\\n")
+    sys.exit(1)
+sys.path.insert(0, os.path.join(root, "coach"))
+import common
+import live
+sys.exit(common.run_main(lambda: live.main(sys.argv[1:] or ["write"])))
+'''
+
+
+def launch_agents_dir():
+    """Where per-user LaunchAgents live. $COACH_LAUNCH_AGENTS_DIR overrides it (tests use this)."""
+    return (os.environ.get("COACH_LAUNCH_AGENTS_DIR")
+            or os.path.join(os.path.expanduser("~"), "Library", "LaunchAgents"))
+
+
+def live_plist_path(agents_dir=None):
+    return os.path.join(agents_dir or launch_agents_dir(), LIVE_LABEL + ".plist")
+
+
+def live_launcher_path():
+    return os.path.join(C.coach_home(), LIVE_LAUNCHER_NAME)
+
+
+def _python3():
+    """A python3 path that survives upgrades: the one on PATH, else the system one."""
+    import shutil
+    found = shutil.which("python3")
+    venv = os.environ.get("VIRTUAL_ENV") or ""
+    if found and os.path.isabs(found) and not (venv and found.startswith(venv.rstrip("/") + "/")):
+        return found
+    for fixed in ("/opt/homebrew/bin/python3", "/usr/local/bin/python3"):
+        if os.path.isfile(fixed):               # a virtualenv on PATH would not outlive its folder
+            return fixed
+    return "/usr/bin/python3"
+
+
+def live_plist(python=None):
+    """The LaunchAgent as a dict: run the launcher with `write` every 60 seconds."""
+    env = {}
+    for name in ("COACH_HOME", "CLAUDE_CONFIG_DIR"):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    plist = {
+        "Label": LIVE_LABEL,
+        "ProgramArguments": [python or _python3(), live_launcher_path(), "write"],
+        "StartInterval": LIVE_INTERVAL_SEC,
+        "RunAtLoad": True,
+        "ProcessType": "Background",
+        "LowPriorityIO": True,
+        "Nice": 10,
+        "StandardOutPath": "/dev/null",
+        "StandardErrorPath": os.path.join(C.coach_home(), LIVE_ERR_LOG),
+    }
+    if env:
+        plist["EnvironmentVariables"] = env
+    return plist
+
+
+def live_plist_bytes(python=None):
+    import plistlib
+    return plistlib.dumps(live_plist(python), sort_keys=True)
+
+
+def _launchctl(args):
+    """Run launchctl. Returns (exit code, text). Never raises."""
+    import subprocess
+    try:
+        p = subprocess.run(["/bin/launchctl"] + list(args), stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, timeout=20)
+        return p.returncode, p.stdout.decode("utf-8", "replace").strip()[:400]
+    except Exception as exc:
+        return 127, "%s: %s" % (type(exc).__name__, exc)
+
+
+def _gui_domain():
+    return "gui/%d" % os.getuid()
+
+
+def _write_file(path, data, mode):
+    folder = os.path.dirname(path)
+    if not os.path.isdir(folder):
+        os.makedirs(folder)
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def live_agent_status(agents_dir=None, run=None):
+    """Read-only: is the runner installed, is it the one this version writes, is it loaded."""
+    import time
+    path = live_plist_path(agents_dir)
+    out = {"label": LIVE_LABEL, "plist": path, "installed": os.path.isfile(path),
+           "current": False, "loaded": None, "interval_seconds": LIVE_INTERVAL_SEC,
+           "launcher": {"file": live_launcher_path(), "exists": os.path.isfile(live_launcher_path())},
+           "supported": sys.platform == "darwin"}
+    if out["installed"]:
+        try:
+            import plistlib
+            with open(path, "rb") as fh:
+                have = plistlib.load(fh)
+            # the python path and the environment are those of the shell that installed it:
+            # they are not compared, or a status from another shell would ask for a reinstall
+            want = live_plist(python=(have.get("ProgramArguments") or [None])[0])
+            want.pop("EnvironmentVariables", None)
+            have.pop("EnvironmentVariables", None)
+            out["current"] = have == want
+        except Exception:
+            out["current"] = False
+    if out["supported"]:
+        code, _text = (run or _launchctl)(["print", "%s/%s" % (_gui_domain(), LIVE_LABEL)])
+        out["loaded"] = code == 0
+    feed = os.path.join(C.coach_home(), "live.json")
+    out["feed"] = {"file": feed, "exists": os.path.isfile(feed), "age_seconds": None}
+    try:
+        out["feed"]["age_seconds"] = int(max(0, time.time() - os.stat(feed).st_mtime))
+    except OSError:
+        pass
+    return out
+
+
+def live_agent_install(agents_dir=None, run=None, python=None, wait=1.0):
+    """Write the launcher and the LaunchAgent, then load it. Call only after the person said yes."""
+    run = run or _launchctl
+    res = {"ok": False, "error": None, "label": LIVE_LABEL, "plist": live_plist_path(agents_dir),
+           "launcher": live_launcher_path()}
+    if sys.platform != "darwin":
+        res["error"] = "the live feed runner is a macOS LaunchAgent; nothing was changed."
+        return res
+    try:
+        _write_file(live_launcher_path(), LIVE_LAUNCHER.encode("utf-8"), 0o755)
+        _write_file(os.path.join(C.coach_home(), LIVE_PATH_NOTE), (PLUGIN_ROOT + "\n").encode("utf-8"),
+                    0o644)
+        _write_file(res["plist"], live_plist_bytes(python), 0o644)
+    except OSError as exc:
+        res["error"] = "could not write: %s" % exc
+        return res
+    target = "%s/%s" % (_gui_domain(), LIVE_LABEL)
+    run(["bootout", target])                    # an older copy, if one is loaded; a miss is fine
+    code, text = run(["bootstrap", _gui_domain(), res["plist"]])
+    for _ in range(3):                          # launchd may still be unloading the older copy
+        if code == 0:
+            break
+        import time
+        time.sleep(wait)
+        code, text = run(["bootstrap", _gui_domain(), res["plist"]])
+    if code != 0:
+        res["error"] = "launchctl could not load it (%d): %s" % (code, text)
+        return res
+    res["ok"] = True
+    res["runs"] = "every %d seconds, and once at login" % LIVE_INTERVAL_SEC
+    return res
+
+
+def live_agent_uninstall(agents_dir=None, run=None):
+    """Unload the LaunchAgent and remove what install wrote. The feed file and cache stay."""
+    run = run or _launchctl
+    res = {"ok": True, "error": None, "label": LIVE_LABEL, "plist": live_plist_path(agents_dir),
+           "removed": []}
+    if sys.platform == "darwin":
+        run(["bootout", "%s/%s" % (_gui_domain(), LIVE_LABEL)])
+    for path in (res["plist"], live_launcher_path(), os.path.join(C.coach_home(), LIVE_PATH_NOTE)):
+        try:
+            os.remove(path)
+            res["removed"].append(path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            res["ok"] = False
+            res["error"] = "could not remove %s: %s" % (path, exc)
+    return res
+
+
 def check(claude=None):
     claude = claude or C.claude_dir()
     out = {"plugin_root": PLUGIN_ROOT, "coach_home": C.coach_home(),
@@ -211,13 +460,33 @@ def check(claude=None):
                                 "seeded": os.path.isfile(followthrough.advice_file())}
     except Exception:
         out["followthrough"] = {"seeded": False}
+    try:
+        out["live_agent"] = live_agent_status()
+    except Exception:
+        out["live_agent"] = {"installed": False, "loaded": None}
     out["clean"] = (not out["old_hooks"] and not out["old_reports"]
                     and all(t["state"] == "ok" and not t.get("duplicate_id")
                             and t.get("prompt_current") for t in out["tasks"]))
     return out
 
 
-def main():
+def main(argv=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] == "live-agent":
+        actions = {"status": live_agent_status, "install": live_agent_install,
+                   "uninstall": live_agent_uninstall}
+        if len(args) != 2 or args[1] not in actions:
+            # an unknown word must never fall through to an install or an uninstall
+            sys.stdout.write(json.dumps({"ok": False, "error": "usage: setup_check.py live-agent "
+                                         "status|install|uninstall"}, indent=1) + "\n")
+            return 2
+        out = actions[args[1]]()
+        sys.stdout.write(json.dumps(out, indent=1) + "\n")
+        return 0 if out.get("ok", True) else 2
+    if args:
+        sys.stdout.write(json.dumps({"ok": False, "error": "unknown argument %r" % args[0]},
+                                    indent=1) + "\n")
+        return 2
     sys.stdout.write(json.dumps(check(), indent=1) + "\n")
     return 0
 

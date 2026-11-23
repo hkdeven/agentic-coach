@@ -18,9 +18,13 @@
   python3 coach/config.py remove exclude_dates <day or range>
   python3 coach/config.py set other_project <name>             one row for chats with no folder
   python3 coach/config.py unset other_project
+  python3 coach/config.py set display_name <text>              the name in the page title and header
+  python3 coach/config.py unset display_name                   back to "Agentic Coach"
 
 A short account id is the first 6 or more hex characters of the account id;
-`current` takes it from the login in .claude.json. Full ids are never stored.
+`current` takes it from the account this Claude Code session runs under (the
+desktop app's own account in the Code tab), else from the Terminal login in
+.claude.json. Full ids are never stored.
 
 <id> is a session id or its first 8 or more characters. <text> is part of a
 folder path, a title or a project name (a glob such as *client* also works),
@@ -45,7 +49,8 @@ USAGE = ("use: show | set page_url <https://claude.ai/... link> | unset page_url
          "add exclude <text> | remove exclude <text> | set only_account <short id>|current | "
          "unset only_account | set unknown_account include|exclude | "
          "add exclude_dates <day or range> | remove exclude_dates <day or range> | "
-         "set other_project <name> | unset other_project")
+         "set other_project <name> | unset other_project | "
+         "set display_name <text> | unset display_name")
 ID_RE = re.compile(r"^[0-9A-Za-z-]{8,64}$")
 
 
@@ -155,9 +160,10 @@ def change(words):
         value = words[2].strip().lower()
         if value == "current":
             import accounts
-            value = accounts.current()["account"]
+            who = accounts.session_account(os.environ.get("CLAUDE_CODE_SESSION_ID") or "")
+            value = (who or {}).get("account") or ""
             if not value:
-                return "no login found in .claude.json, so the current account is not known"
+                return "the account of this session is not known (no account from Claude Code and no login in .claude.json)"
         if not re.fullmatch(r"[0-9a-f]{6,64}", value):
             return "not a short account id (want 6 or more hex characters, or: current)"
         raw["only_account"] = value[:6]          # the short form only, never a full id
@@ -194,6 +200,13 @@ def change(words):
         raw["other_project"] = name
     elif words == ["unset", "other_project"]:
         raw.pop("other_project", None)
+    elif len(words) >= 3 and words[:2] == ["set", "display_name"]:
+        name = C.clean_display_name(" ".join(words[2:]))
+        if not name:
+            return USAGE
+        raw["display_name"] = name
+    elif words == ["unset", "display_name"]:
+        raw.pop("display_name", None)
     else:
         return USAGE
     _write(raw)
