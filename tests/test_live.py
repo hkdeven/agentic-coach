@@ -255,7 +255,7 @@ class Counting(Home):
                                      "version"])
         self.assertEqual(sorted(f["periods"]), ["all", "month", "today", "week"])
         keys = ["activities", "cache_hit", "calls", "corrections", "cost_usd", "first_try", "label",
-                "mcp_servers", "peak", "prev_cost_usd", "projects", "series", "series_unit",
+                "mcp_servers", "models", "peak", "prev_cost_usd", "projects", "series", "series_unit",
                 "sessions", "tokens"]
         for name, p in f["periods"].items():
             # All time also says where it starts and where its detail starts
@@ -671,6 +671,261 @@ class McpServers(Home):
                                asst("msg_1", at(TODAY, 9, 1), tools=[("mcp__hidden__t", {})],
                                     cwd="/tmp/demo/secret")], pdir="-tmp-demo-secret")
         self.assertEqual(self.feed()["periods"]["today"]["mcp_servers"], [])
+
+
+OPUS = "claude-opus-5-5"
+
+
+def denied(tool_id, ep, kind=None, text="x"):
+    """A tool result marked as an error that is a refusal."""
+    d = result(tool_id, ep, error=True)
+    d["message"]["content"][0]["content"] = text
+    if kind:
+        d["toolDenialKind"] = kind
+    return d
+
+
+class Models(Home):
+    def rows(self, period="today"):
+        return dict((r["name"], r) for r in self.feed()["periods"][period]["models"])
+
+    def test_rows_by_cost_with_the_main_and_subagent_split(self):
+        self.transcript("s1", [user("go", at(TODAY, 9)),
+                               asst("msg_1", at(TODAY, 9, 1), usage(0, 1000000, 0, 0),
+                                    tools=[("Agent", {"prompt": "x"})])])
+        self.transcript("s1", [user("add the page", at(TODAY, 9, 2), isSidechain=True),
+                               asst("msg_s1", at(TODAY, 9, 3), usage(0, 2000000, 0, 0), model=OPUS,
+                                    isSidechain=True),
+                               asst("msg_s2", at(TODAY, 9, 4), usage(0, 500000, 0, 0), isSidechain=True)],
+                        sub="agent-1")
+        t = self.feed()["periods"]["today"]
+        rows = t["models"]
+        fable, opus = P.rates(MODEL)[1], P.rates(OPUS)[1]
+        want = sorted([("Claude Fable 5.2", 1.5 * fable), ("Claude Opus 5.5", 2.0 * opus)],
+                      key=lambda r: -r[1])
+        self.assertEqual([r["name"] for r in rows], [w[0] for w in want])
+        self.assertEqual(list(rows[0]), ["name", "usd", "share", "main_usd", "sub_usd", "first_try",
+                                         "edit_turns", "tool_calls", "tool_errors", "error_rate",
+                                         "redone_edits", "corrections", "where_most", "where"])
+        by = dict((r["name"], r) for r in rows)
+        f = by["Claude Fable 5.2"]
+        self.assertEqual((f["main_usd"], f["sub_usd"], f["usd"]),
+                         (round(1.0 * fable, 2), round(0.5 * fable, 2), round(1.5 * fable, 2)))
+        o = by["Claude Opus 5.5"]
+        self.assertEqual((o["main_usd"], o["sub_usd"]), (0.0, round(2.0 * opus, 2)))
+        self.assertAlmostEqual(sum(r["share"] for r in rows), 1.0, places=3)
+        self.assertAlmostEqual(sum(r["usd"] for r in rows), t["cost_usd"], places=1)
+        self.assertEqual(f["share"], round(1.5 * fable / (1.5 * fable + 2.0 * opus), 4))
+        json.dumps(rows)
+
+    def test_a_dated_id_is_the_same_model(self):
+        self.transcript("s1", [user("go", at(TODAY, 9)),
+                               asst("msg_1", at(TODAY, 9, 1), usage(0, 100, 0, 0)),
+                               asst("msg_2", at(TODAY, 9, 2), usage(0, 100, 0, 0), model=MODEL + "-20261101")])
+        self.assertEqual(list(self.rows()), ["Claude Fable 5.2"])
+
+    def test_no_spend_no_row(self):
+        self.assertEqual(self.feed()["periods"]["today"]["models"], [])
+        self.transcript("s1", [user("go", at(TODAY, 9)),
+                               asst("msg_1", at(TODAY, 9, 1), usage(0, 0, 0, 0), tools=[("Bash", {}, "t1")]),
+                               asst("msg_2", at(TODAY, 9, 2), usage(0, 50, 0, 0), model="claude-unknown-9")])
+        self.assertEqual(self.feed()["periods"]["today"]["models"], [])
+
+    def test_tool_calls_and_errors_belong_to_the_calling_model(self):
+        self.transcript("s1", [
+            user("look", at(TODAY, 9)),
+            asst("msg_1", at(TODAY, 9, 1), tools=[("Bash", {"command": "make"}, "t1"), ("Read", {}, "t2"),
+                                                  ("Read", {}, "t3"), ("Read", {}, "t4")]),
+            result("t1", at(TODAY, 9, 2), error=True),
+            denied("t2", at(TODAY, 9, 2), kind="user-rejected"),                  # a refusal: no error
+            denied("t3", at(TODAY, 9, 2), text="The user doesn't want to proceed with this tool use."),
+            result("t4", at(TODAY, 9, 2)),
+            asst("msg_2", at(TODAY, 9, 3), model=OPUS, tools=[("Bash", {"command": "make"}, "t5"),
+                                                             ("mcp__zoho-crm__getRecord", {}, "t6")]),
+            result("t5", at(TODAY, 9, 4), error=True),
+            result("t6", at(TODAY, 9, 4), error=True),
+            user("look again", at("2026-11-20", 9)),
+            asst("msg_3", at("2026-11-20", 9, 1), tools=[("Grep", {}, "t7")]),
+            result("t7", at("2026-11-20", 9, 2), error=True)])
+        rows = self.rows()
+        f, o = rows["Claude Fable 5.2"], rows["Claude Opus 5.5"]
+        self.assertEqual((f["tool_calls"], f["tool_errors"], f["error_rate"]), (4, 1, 0.25))
+        self.assertEqual((o["tool_calls"], o["tool_errors"], o["error_rate"]), (2, 2, 1.0))
+        self.assertEqual(f["where"], [{"name": "Bash", "kind": "tool", "errors": 1, "redone_edits": 0,
+                                       "corrections": 0}])
+        self.assertEqual([(w["name"], w["kind"], w["errors"]) for w in o["where"]],
+                         [("Bash", "tool", 1), ("zoho crm", "mcp", 1)])
+        self.assertIsNone(f["first_try"])                       # no edits
+        self.assertEqual((f["edit_turns"], f["redone_edits"]), (0, 0))
+        w = self.rows("week")["Claude Fable 5.2"]               # the error on Nov 20 is in the week only
+        self.assertEqual((w["tool_calls"], w["tool_errors"]), (5, 2))
+
+    def test_redone_edits_go_to_the_model_that_made_the_retrying_edit(self):
+        self.transcript("s1", [
+            # one turn, two models: Fable edits a, a check runs, Opus edits a again
+            user("tidy", at(TODAY, 9)),
+            asst("msg_1", at(TODAY, 9, 1), tools=[("Edit", {"file_path": "/x/a.py"})]),
+            asst("msg_2", at(TODAY, 9, 2), tools=[("Bash", {"command": "pytest"})]),
+            asst("msg_3", at(TODAY, 9, 3), model=OPUS, tools=[("Edit", {"file_path": "/x/a.py"})]),
+            # Fable alone retries, twice in the turn: still one redone edit turn
+            user("tidy more", at(TODAY, 10)),
+            asst("msg_4", at(TODAY, 10, 1), tools=[("Write", {"file_path": "/x/b.py"})]),
+            asst("msg_5", at(TODAY, 10, 2), tools=[("Bash", {"command": "make"})]),
+            asst("msg_6", at(TODAY, 10, 3), tools=[("Write", {"file_path": "/x/b.py"})]),
+            asst("msg_7", at(TODAY, 10, 4), tools=[("Bash", {"command": "make"})]),
+            asst("msg_8", at(TODAY, 10, 5), tools=[("Edit", {"file_path": "/x/b.py"})]),
+            # Fable, clean
+            user("tidy the rest", at(TODAY, 11)),
+            asst("msg_9", at(TODAY, 11, 1), tools=[("Edit", {"file_path": "/x/c.py"})])])
+        rows = self.rows()
+        f, o = rows["Claude Fable 5.2"], rows["Claude Opus 5.5"]
+        self.assertEqual((f["edit_turns"], f["redone_edits"], f["first_try"]), (3, 1, 0.6667))
+        self.assertEqual((o["edit_turns"], o["redone_edits"], o["first_try"]), (1, 1, 0.0))
+        self.assertEqual(f["where"], [{"name": "Write", "kind": "tool", "errors": 0, "redone_edits": 1,
+                                       "corrections": 0}])
+        self.assertEqual(o["where"], [{"name": "Edit", "kind": "tool", "errors": 0, "redone_edits": 1,
+                                       "corrections": 0}])
+        # the whole period's first-try rule is unchanged: 3 edit turns, 1 clean
+        self.assertEqual(self.feed()["periods"]["today"]["first_try"]["edit_turns"], 3)
+
+    def test_corrections_go_to_the_last_answer_and_its_last_tool(self):
+        self.transcript("s1", [
+            user("add a page", at(TODAY, 9)),
+            asst("msg_1", at(TODAY, 9, 1), tools=[("Read", {})]),
+            asst("msg_2", at(TODAY, 9, 2), tools=[("Bash", {"command": "make"})]),
+            user("no, that is wrong", at(TODAY, 9, 10)),
+            asst("msg_3", at(TODAY, 9, 11), model=OPUS),
+            user("you forgot the title", at(TODAY, 9, 20)),
+            asst("msg_4", at(TODAY, 9, 21), model=OPUS, tools=[("mcp__Claude_Browser__navigate", {})]),
+            user("thanks", at(TODAY, 9, 30)),
+            asst("msg_5", at(TODAY, 9, 31)),
+            user("undo that", at(TODAY, 9, 40))])
+        t = self.feed()["periods"]["today"]
+        rows = dict((r["name"], r) for r in t["models"])
+        f, o = rows["Claude Fable 5.2"], rows["Claude Opus 5.5"]
+        self.assertEqual((f["corrections"], o["corrections"]), (2, 1))
+        self.assertEqual(f["corrections"] + o["corrections"], t["corrections"]["count"])
+        self.assertEqual([(w["name"], w["kind"], w["corrections"]) for w in f["where"]],
+                         [("Bash", "tool", 1), ("No tool", "none", 1)])
+        self.assertEqual([(w["name"], w["kind"], w["corrections"]) for w in o["where"]],
+                         [("No tool", "none", 1)])
+
+    def test_a_correction_with_no_answer_before_it_has_no_model(self):
+        self.transcript("s1", [user("no, that is wrong", at(TODAY, 9)),
+                               asst("msg_1", at(TODAY, 9, 1))])
+        t = self.feed()["periods"]["today"]
+        self.assertEqual(t["corrections"]["count"], 1)
+        self.assertEqual(t["models"][0]["corrections"], 0)
+
+    def test_where_most_is_the_top_three_activities_by_cost(self):
+        self.transcript("s1", [
+            user("run the test suite", at(TODAY, 8)),
+            asst("msg_1", at(TODAY, 8, 1), usage(0, 400000, 0, 0), tools=[("Bash", {"command": "pytest"})]),
+            user("tidy", at(TODAY, 9)),
+            asst("msg_2", at(TODAY, 9, 1), usage(0, 300000, 0, 0), tools=[("Edit", {"file_path": "a"})]),
+            user("thanks", at(TODAY, 10)),
+            asst("msg_3", at(TODAY, 10, 1), usage(0, 200000, 0, 0)),
+            user("look", at(TODAY, 11)),
+            asst("msg_4", at(TODAY, 11, 1), usage(0, 100000, 0, 0), tools=[("Read", {})]),
+            user("look more", at(TODAY, 11, 5)),
+            asst("msg_5", at(TODAY, 11, 6), usage(0, 900000, 0, 0), tools=[("Read", {})], model=OPUS)])
+        rows = self.rows()
+        self.assertEqual(rows["Claude Fable 5.2"]["where_most"], "Testing, Coding, Conversation")
+        self.assertEqual(rows["Claude Opus 5.5"]["where_most"], "Exploration")
+
+    def test_where_has_at_most_six_rows_most_errors_first(self):
+        recs = [user("go", at(TODAY, 9))]
+        tools, results = [], []
+        names = ["Tool%d" % i for i in range(7)] + ["mcp__Claude_Browser__navigate"] * 9
+        for i, name in enumerate(names):
+            n = (int(name[4:]) + 1) if name.startswith("Tool") else 1
+            for k in range(n):
+                tid = "t%d_%d" % (i, k)
+                tools.append((name, {}, tid))
+                results.append(result(tid, at(TODAY, 9, 2), error=True))
+        recs.append(asst("msg_1", at(TODAY, 9, 1), tools=tools))
+        recs += results
+        self.transcript("s1", recs)
+        where = self.rows()["Claude Fable 5.2"]["where"]
+        self.assertEqual([(w["name"], w["errors"]) for w in where],
+                         [("Claude browser", 9), ("Tool6", 7), ("Tool5", 6), ("Tool4", 5), ("Tool3", 4),
+                          ("Tool2", 3)])
+        self.assertEqual(where[0]["kind"], "mcp")
+
+    def test_a_resumed_copy_counts_its_tool_calls_once(self):
+        first = [user("go", at(TODAY, 9)), asst("msg_a1", at(TODAY, 9, 1), tools=[("Bash", {}, "t1")]),
+                 result("t1", at(TODAY, 9, 2), error=True)]
+        self.transcript("s1", first, mtime=NOW - 7200)
+        self.transcript("s2", first + [user("more", at(TODAY, 10)),
+                                       asst("msg_b1", at(TODAY, 10, 1), tools=[("Read", {}, "t2")])])
+        f = self.rows()["Claude Fable 5.2"]
+        self.assertEqual((f["tool_calls"], f["tool_errors"]), (2, 1))
+
+    def test_exclusions_and_the_account_filter_apply(self):
+        self.transcript("s1", [user("go", at(TODAY, 9)), asst("msg_1", at(TODAY, 9, 1), usage(0, 10, 0, 0))])
+        self.transcript("s2", [user("go", at(TODAY, 9), cwd="/tmp/demo/secret-client"),
+                               asst("msg_2", at(TODAY, 9, 1), usage(0, 5000, 0, 0), model=OPUS,
+                                    cwd="/tmp/demo/secret-client", tools=[("Bash", {}, "t1")]),
+                               result("t1", at(TODAY, 9, 2), error=True)],
+                        pdir="-tmp-demo-secret-client")
+        self.transcript("s3", [user("go", at("2026-11-22", 9)),
+                               asst("msg_3", at("2026-11-22", 9, 1), usage(0, 10, 0, 0), model=OPUS)])
+        self.assertEqual(sorted(self.rows("week")), ["Claude Fable 5.2", "Claude Opus 5.5"])
+        self.config(exclude=[{"match": ["secret-client"]}], exclude_dates=["2026-11-22"])
+        self.assertEqual(sorted(self.rows("week")), ["Claude Fable 5.2"])
+        self.config(only_account="aaaaaa")
+        import accounts
+        accounts.record("s1", when=at(TODAY, 8), who={"account": "bbbbbb", "org": "cccccc"})
+        self.assertEqual(sorted(self.rows("week")), ["Claude Opus 5.5"])
+
+    def test_ledger_days_give_cost_by_model_only(self):
+        led = {"version": 1, "days": {"2026-11-10": {"closed": True, "sessions": {
+            "old-session-1": {"project": "acme", "scheduled": False,
+                              "models": {MODEL: [[0, 2000000, 0, 0, 0], [0, 1000000, 0, 0, 0]]}}}}}}
+        L.save(L._clean(led))
+        rows = self.feed()["periods"]["month"]["models"]
+        out = P.rates(MODEL)[1]
+        self.assertEqual(rows, [{"name": "Claude Fable 5.2", "usd": round(3 * out, 2), "share": 1.0,
+                                 "main_usd": round(2 * out, 2), "sub_usd": round(out, 2),
+                                 "first_try": None, "edit_turns": 0, "tool_calls": 0, "tool_errors": 0,
+                                 "error_rate": None, "redone_edits": 0, "corrections": 0,
+                                 "where_most": None, "where": []}])
+
+    def test_no_prompt_text_in_the_feed_or_the_cache(self):
+        self.transcript("s1", [user("add the zebra-unicorn page", at(TODAY, 9)),
+                               asst("msg_1", at(TODAY, 9, 1), tools=[("Bash", {"command": "echo zebra-cmd"})]),
+                               user("no, zebra is wrong", at(TODAY, 9, 5)),
+                               asst("msg_2", at(TODAY, 9, 6))])
+        f = self.feed()
+        self.assertEqual(f["periods"]["today"]["models"][0]["corrections"], 1)
+        self.assertNotIn("zebra", json.dumps(f))
+        for name in ("live-cache.json", "live-mids.json"):
+            with open(os.path.join(self.home, name)) as fh:
+                self.assertNotIn("zebra", fh.read())
+
+    def test_odd_content_keeps_the_message_usage(self):
+        bad = asst("msg_2", at(TODAY, 9, 2), usage(0, 70, 0, 0))
+        bad["message"]["content"] = 5
+        self.transcript("s1", [user("go", at(TODAY, 9)), asst("msg_1", at(TODAY, 9, 1), usage(0, 30, 0, 0)), bad])
+        t = self.feed()["periods"]["today"]
+        self.assertEqual((t["tokens"], t["calls"]), (100, 2))
+        self.assertEqual(t["models"][0]["tool_calls"], 0)
+
+    def test_an_older_cache_is_rebuilt(self):
+        self.assertGreaterEqual(LV.CACHE_VERSION, 7)
+        self.transcript("s1", [user("go", at(TODAY, 9)), asst("msg_1", at(TODAY, 9, 1), tools=[("Bash", {})])])
+        self.feed()
+        with open(LV.cache_file()) as fh:
+            cache = json.load(fh)
+        cache["v"] = 6                          # a cache written before figures per model
+        for e in cache["files"].values():
+            e["agg"].pop("mod", None)
+        with open(LV.cache_file(), "w") as fh:
+            json.dump(cache, fh)
+        st = {}
+        f = self.feed(stats=st)
+        self.assertEqual(st["read"], 1)
+        self.assertEqual(f["periods"]["today"]["models"][0]["tool_calls"], 1)
 
 
 class Exclusions(Home):

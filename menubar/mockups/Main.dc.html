@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Coach menu bar panel</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+body{margin:0}
+a{color:#6ebbd7}a:hover{color:#9fd3e6}
+button{font:inherit;cursor:pointer}
+</style>
+</helmet>
+<div style="width: 440px; height: 860px; box-sizing: border-box; background: #0c1115; color: #e3e9ee; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; line-height: 1.4; display: flex; flex-direction: column">
+  <div style="height: 28px; background: #19212a; border-bottom: 1px solid #2c3843; display: flex; align-items: center; justify-content: flex-end; gap: 14px; padding: 0 12px">
+    <div style="display: flex; align-items: center; gap: 6px; background: #1b3440; border-radius: 5px; padding: 2px 8px; height: 22px; box-sizing: border-box">
+      <svg aria-hidden="true" width="16" height="14" viewBox="0 0 16 14" fill="none" stroke="#6ebbd7" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="1,11 5,7 8,9 15,2"></polyline></svg>
+      <span style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; font-weight: 500">$27.80</span>
+    </div>
+    <span style="font-size: 12px; color: #b0bbc5">Mon Nov 23 11:41</span>
+  </div>
+
+  <div style="margin: 8px 8px 0 8px; background: #19212a; border: 1px solid #2c3843; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 16px">
+
+    <div style="display: flex; align-items: baseline; justify-content: space-between">
+      <div style="font-size: 15px; font-weight: 600">Agentic Coach</div>
+      <div style="font-size: 12px; color: #8a97a4">Updated 2 min ago</div>
+    </div>
+
+    <div style="display: flex; background: #0c1115; border-radius: 8px; padding: 3px; gap: 3px" role="group" aria-label="Period">
+      <sc-for list="{{periods}}" as="p" hint-placeholder-count="3">
+        <button type="button" onClick="{{p.pick}}" aria-pressed="{{p.on}}" style="flex: 1; height: 30px; border: 0; border-radius: 6px; font-size: 12px; font-weight: 500; background: {{p.bg}}; color: {{p.fg}}">{{p.label}}</button>
+      </sc-for>
+    </div>
+
+    <div style="display: flex; align-items: flex-end; justify-content: space-between">
+      <div>
+        <div style="font-size: 12px; color: #8a97a4">{{heroLabel}}</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 38px; font-weight: 500; line-height: 1.15; letter-spacing: -0.01em">{{cost}}</div>
+        <div style="font-size: 11px; color: #8a97a4">API-equivalent, not a bill</div>
+      </div>
+      <div style="text-align: right; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; color: #b0bbc5; display: flex; flex-direction: column; gap: 2px; padding-bottom: 16px">
+        <div>{{calls}} calls</div>
+        <div>{{sessions}} sessions</div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <div style="display: flex; align-items: baseline; justify-content: space-between">
+        <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">Tokens</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #b0bbc5">{{tokens}} total, peak {{peak}}</div>
+      </div>
+      <svg role="img" aria-label="Line graph of tokens over the chosen period" width="406" height="110" viewBox="0 0 406 110" style="display: block; width: 100%; height: 110px">
+        <line x1="0" y1="8" x2="406" y2="8" stroke="#2c3843" stroke-width="1" stroke-dasharray="2 4"></line>
+        <line x1="0" y1="57" x2="406" y2="57" stroke="#2c3843" stroke-width="1" stroke-dasharray="2 4"></line>
+        <line x1="0" y1="106" x2="406" y2="106" stroke="#2c3843" stroke-width="1"></line>
+        <polygon points="{{area}}" fill="#6ebbd7" fill-opacity="0.12"></polygon>
+        <polyline points="{{line}}" fill="none" stroke="#6ebbd7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+        <circle cx="{{lastX}}" cy="{{lastY}}" r="3.5" fill="#19212a" stroke="#6ebbd7" stroke-width="2"></circle>
+      </svg>
+      <div style="display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #8a97a4">
+        <span>{{x0}}</span><span>{{x1}}</span><span>{{x2}}</span>
+      </div>
+    </div>
+
+    <div style="border-top: 1px solid #2c3843; padding-top: 14px; display: flex; flex-direction: column; gap: 8px">
+      <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">Limits used</div>
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+        <div>
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 24px; font-weight: 500; color: #e3e9ee">7%</div>
+          <div style="font-size: 12px; color: #b0bbc5">5-hour</div>
+          <div style="font-size: 11px; color: #8a97a4">Resets in 2h 43m</div>
+        </div>
+        <div>
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 24px; font-weight: 500; color: #f08b81">94%</div>
+          <div style="font-size: 12px; color: #b0bbc5">Weekly, near limit</div>
+          <div style="font-size: 11px; color: #8a97a4">Resets in 2d 18h</div>
+        </div>
+        <div>
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 24px; font-weight: 500; color: #e2aa56">71%</div>
+          <div style="font-size: 12px; color: #b0bbc5">Weekly, Fable</div>
+          <div style="font-size: 11px; color: #8a97a4">Resets in 2d 18h</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="border-top: 1px solid #2c3843; padding-top: 14px; display: flex; flex-direction: column; gap: 8px">
+      <div style="display: flex; justify-content: space-between; align-items: baseline">
+        <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">Running now</div>
+        <div style="font-size: 12px; color: #8a97a4">1 session</div>
+      </div>
+      <div style="background: #0c1115; border-radius: 8px; padding: 10px 12px; display: flex; justify-content: space-between; align-items: center; gap: 12px">
+        <div style="min-width: 0">
+          <div style="font-weight: 500">agentic-coach, main</div>
+          <div style="font-size: 12px; color: #8a97a4">Fable 5.2, running 1h 12m</div>
+        </div>
+        <div style="text-align: right; font-family: 'IBM Plex Mono', ui-monospace, monospace">
+          <div style="font-size: 14px; color: #e2aa56">64% context</div>
+          <div style="font-size: 11px; color: #8a97a4">359k left</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="border-top: 1px solid #2c3843; padding-top: 14px; display: flex; flex-direction: column; gap: 8px">
+      <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">Top activities</div>
+      <sc-for list="{{acts}}" as="a" hint-placeholder-count="3">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px">
+          <div style="flex: 1">{{a.name}}</div>
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #8a97a4; width: 40px; text-align: right">{{a.share}}</div>
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; width: 84px; text-align: right">{{a.usd}}</div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="border-top: 1px solid #2c3843; padding-top: 12px; display: flex; justify-content: space-between; align-items: center">
+      <a href="#" style="font-size: 13px; font-weight: 500; text-decoration: none">Open coach page</a>
+      <span style="font-size: 11px; color: #8a97a4">Reads this Mac only</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":440,"height":860}}'>
+class Component extends DCLogic {
+  state = { period: 'today' };
+  renderVals() {
+    var period = (this.state && this.state.period) || 'today';
+    var self = this;
+    var data = {
+      today: {
+        heroLabel: 'Today, Nov 23', cost: '$27.80', calls: '403', sessions: '4', tokens: '57.3M', peak: '14.6M at 10:00',
+        x: ['00:00', '06:00', 'Now'],
+        v: [0.2, 0.1, 0, 0, 0, 0.4, 2.1, 6.8, 9.4, 12.2, 14.6, 11.5],
+        acts: [
+          { name: 'Coding', share: '47%', usd: '$13.09' },
+          { name: 'Conversation', share: '47%', usd: '$13.05' },
+          { name: 'Feature Dev', share: '3%', usd: '$0.92' }
+        ]
+      },
+      week: {
+        heroLabel: 'Last 7 days', cost: '$612.40', calls: '5,120', sessions: '31', tokens: '742M', peak: '142M on Nov 20',
+        x: ['Nov 17', 'Nov 20', 'Today'],
+        v: [88, 131, 96, 142, 120, 107.7, 57.3],
+        acts: [
+          { name: 'Coding', share: '49%', usd: '$301.10' },
+          { name: 'Conversation', share: '41%', usd: '$248.70' },
+          { name: 'Feature Dev', share: '10%', usd: '$62.60' }
+        ]
+      },
+      month: {
+        heroLabel: 'Last 30 days', cost: '$7,509.94', calls: '61,300', sessions: '212', tokens: '9.1B', peak: '512M on Nov 12',
+        x: ['Oct 25', 'Nov 8', 'Today'],
+        v: [210, 260, 300, 180, 90, 320, 350, 410, 380, 290, 120, 140, 330, 420, 460, 400, 370, 150, 512, 480, 300, 280, 88, 131, 96, 142, 120, 108, 240, 57],
+        acts: [
+          { name: 'Coding', share: '49%', usd: '$3,680.00' },
+          { name: 'Conversation', share: '41%', usd: '$3,079.00' },
+          { name: 'Feature Dev', share: '10%', usd: '$750.94' }
+        ]
+      }
+    };
+    var d = data[period];
+    var W = 406, top = 8, base = 106;
+    var max = Math.max.apply(null, d.v);
+    var pts = d.v.map(function (v, i) {
+      var x = Math.round((i / (d.v.length - 1)) * (W - 8) + 4);
+      var y = Math.round(base - (v / max) * (base - top));
+      return [x, y];
+    });
+    var line = pts.map(function (p) { return p[0] + ',' + p[1]; }).join(' ');
+    var last = pts[pts.length - 1];
+    var defs = [['today', 'Today'], ['week', '7 days'], ['month', '30 days']];
+    return {
+      heroLabel: d.heroLabel, cost: d.cost, calls: d.calls, sessions: d.sessions, tokens: d.tokens, peak: d.peak,
+      x0: d.x[0], x1: d.x[1], x2: d.x[2],
+      line: line,
+      area: '4,' + base + ' ' + line + ' ' + last[0] + ',' + base,
+      lastX: last[0], lastY: last[1],
+      acts: d.acts,
+      periods: defs.map(function (p) {
+        var on = p[0] === period;
+        return {
+          label: p[1], on: on,
+          bg: on ? '#1b3440' : 'transparent',
+          fg: on ? '#e3e9ee' : '#b0bbc5',
+          pick: function () { self.setState({ period: p[0] }); }
+        };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>

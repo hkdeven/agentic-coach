@@ -608,10 +608,11 @@ class RecapCostTest(Base):
         self.assertIn('id="view-cost"', page)
         data = json.loads(page.split('id="coach-data">', 1)[1].split("</script>", 1)[0])
         cost = data["cost"]
-        self.assertEqual([p_["key"] for p_ in cost["periods"]], ["day", "week7", "calweek", "all"])
-        self.assertEqual(cost["day"], "2026-11-11")              # the latest full day on record
-        allt = cost["periods"][3]["t"]
-        self.assertAlmostEqual(sum(r["usd"] for r in allt["by_project"]), allt["usd"], places=1)
+        self.assertEqual(sorted(cost["periods"]), ["all", "month", "today", "week"])   # the Overview's
+        self.assertEqual(cost["periods"]["today"]["t"]["days"], 0)     # nothing on record for the 12th
+        self.assertEqual(cost["periods"]["week"]["t"]["days"], 2)
+        allt = cost["periods"]["all"]["t"]
+        self.assertAlmostEqual(sum(r["usd"] for r in allt["split"]["project"]), allt["usd"], places=1)
         self.assertEqual([t["type"] for t in allt["by_type"]],
                          ["Input", "Output", "Cache read", "Cache write"])
         self.assertEqual(cost["since"], "2026-11-10")

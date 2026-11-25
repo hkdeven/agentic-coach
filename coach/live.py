@@ -14,8 +14,8 @@ file too; it is plain JSON.
 What is in the feed (version 1): for today, the last 7 days, the last 30
 days and all time: cost, calls, sessions, tokens, a series for a line graph,
 the peak, the first-try edit rate, the cache hit rate, corrections, spend by
-activity, spend by project, MCP servers called, and the same figures for the
-period just before (all time has none). Then the plan limits last seen by the
+activity, spend by project, MCP servers called, figures per model, and the
+same figures for the period just before (all time has none). Then the plan limits last seen by the
 status line, the sessions running now, and up to three tips from the latest
 findings.
 
@@ -63,6 +63,18 @@ Rules:
   the first day of the period. Its graph has one point a day up to 60 days and
   one a week (dated by its Monday) beyond that. It has no period before, so
   every prev_ figure is null.
+- Models: every assistant message, main or subagent, carries its model (the
+  model key pricing.py prices it under; rows are named by display name). A tool
+  call, its error and any edit it makes belong to the model of the message
+  that made the call. Errors are tool results marked as errors, less refusals
+  (the person said no, or a permission rule blocked it), as extract.py counts
+  them. An edit turn counts once for each model that edited in it; it is
+  redone for a model when that model made a retrying edit (the first-try
+  rule), else clean for it. A correction belongs to the model of the last
+  assistant message before the prompt, and its tool is the last tool call of
+  that answer ("No tool" when it made none). Cost per model, split main and
+  subagent, covers ledger days too; every other model figure exists only
+  where the transcript was read.
 - A running session is one whose transcript changed in the last 10 minutes.
   Its start is the first message of its current run: a session that was closed
   and resumed, or left untouched for 6 hours, starts a new run.
@@ -107,7 +119,7 @@ import pricing as P  # noqa: E402
 import scope as SC  # noqa: E402
 
 VERSION = 1
-CACHE_VERSION = 6          # 6: sessions re-tagged under the 1.3.0 account rules
+CACHE_VERSION = 7          # 7: figures per model (tool calls, errors, edits, corrections)
 ALL_DAILY_DAYS = 60         # All time: one point a day up to this many days, then one a week
 ALL_MAX_DAYS = 3660         # All time never reaches further back than ten years (a record with a broken clock)
 RUN_GAP_SEC = 6 * 3600      # a session untouched this long starts a new run when it is used again
@@ -124,6 +136,11 @@ LIMIT_WINDOWS = (("five_hour", "five_hour", "5-hour", 5 * 3600),
                  ("seven_day", "weekly", "Weekly", 7 * 86400))
 SEVERITY = {"high": 0, "medium": 1, "low": 2}
 OTHER = "Other"
+NO_TOOL = "No tool"
+MODEL_WHERE_ROWS = 6
+PEND_MAX = 400              # tool calls kept waiting for their result
+# A tool result marked as an error that is a refusal, not a failure (extract.py's rule)
+_DENIAL_HEADS = ("The user doesn't want to proceed", "Permission for this action was denied")
 # Record types that are read. Any other line that opens with a type is bookkeeping
 # (API request copies, queue notes) and is skipped without being parsed.
 _TYPE = b'{"type":"'
@@ -242,13 +259,52 @@ def new_entry(sub=False):
     return {"off": 0, "size": 0, "mtime": 0, "sub": bool(sub),
             "meta": {"cwd": None, "titles": [], "ctitles": [], "first": None, "branch": None,
                      "run": None, "last": None, "ended": False},
-            "agg": {"h": {}, "calls": {}, "act": {}, "corr": {}, "edits": {}, "mcp": {}},
-            "open": None, "recent": {}, "pend": {}, "rp": {}, "peak": {}, "turn": 0}
+            "agg": {"h": {}, "calls": {}, "act": {}, "corr": {}, "edits": {}, "mcp": {}, "mod": {}},
+            "open": None, "recent": {}, "pend": {}, "rp": {}, "peak": {}, "turn": 0,
+            "ans": None}       # the last answer: [model key, its last tool key or None, turn number]
 
 
 def _new_turn(hour, flags):
+    # "me": model key -> "" (it edited, no retry) or the tool key of its first retrying edit
     return {"day": hour[:10], "hour": hour, "flags": flags, "kinds": "",
-            "retry": A.new_retry_state(), "tok": {}, "msgs": 0}
+            "retry": A.new_retry_state(), "tok": {}, "msgs": 0, "me": {}}
+
+
+def _new_mod():
+    """One model's figures for one day: tool calls, errors, edit turns, clean ones,
+    redone ones, corrections, and by tool key [errors, redone, corrections]."""
+    return {"c": 0, "e": 0, "t": 0, "k": 0, "r": 0, "x": 0, "w": {}}
+
+
+def _mod_row(agg, day, mkey):
+    return agg.setdefault("mod", {}).setdefault(day, {}).setdefault(mkey, _new_mod())
+
+
+def _where(row, tkey):
+    return row["w"].setdefault(tkey, [0, 0, 0])
+
+
+def _tool_key(name):
+    """An MCP tool is kept under its server ("mcp__<server>"), any other tool under its name."""
+    if name.startswith("mcp__"):
+        server = name[5:].partition("__")[0]
+        if server:
+            return "mcp__" + server
+    return name
+
+
+def _msg_model(model, usage):
+    """The model key a message's tool calls belong to, or None for Claude Code's own notes."""
+    if model == "<synthetic>":
+        return None
+    return P.model_key(model, usage if isinstance(usage, dict) else None)
+
+
+def _is_denial(d, block):
+    """A tool result marked as an error that is a refusal (extract.py's rule)."""
+    if d.get("toolDenialKind"):
+        return True
+    return C.result_head(block.get("content")).startswith(_DENIAL_HEADS)
 
 
 def _act_row(agg, day, cat):
@@ -272,6 +328,14 @@ def close_turn(agg, turn):
         pair = agg.setdefault("edits", {}).setdefault(turn["hour"], [0, 0])
         pair[0] += 1                        # edit turns and clean ones, by the hour the turn began
         pair[1] += clean
+    for mkey, redo in (turn.get("me") or {}).items():
+        row = _mod_row(agg, turn["day"], mkey)  # an edit turn for each model that edited in it
+        row["t"] += 1
+        if redo:
+            row["r"] += 1
+            _where(row, redo)[1] += 1
+        else:
+            row["k"] += 1
 
 
 def _texts(d):
@@ -345,6 +409,11 @@ class Reader(object):
                     del e["rp"][next(iter(e["rp"]))]
             if C.is_correction(text):
                 e["agg"]["corr"][hour] = e["agg"]["corr"].get(hour, 0) + 1
+                ans = e.get("ans")
+                if ans and ans[0]:              # the model of the answer it corrects
+                    row = _mod_row(e["agg"], hour[:10], ans[0])
+                    row["x"] += 1
+                    _where(row, ans[1] or "")[2] += 1
         close_turn(e["agg"], e["open"])
         e["open"] = _new_turn(hour, A.prompt_flags(text))
         e["turn"] = e.get("turn", 0) + 1
@@ -355,9 +424,14 @@ class Reader(object):
         for b in results:
             hit = e["pend"].pop(b.get("tool_use_id"), None)
             if hit and b.get("is_error"):
-                row = e["agg"]["mcp"].setdefault(hit[1], {}).setdefault(
-                    hit[0], {"c": 0, "e": 0, "t": []})
-                row["e"] += 1
+                if hit[0]:                      # an MCP server's call
+                    row = e["agg"]["mcp"].setdefault(hit[1], {}).setdefault(
+                        hit[0], {"c": 0, "e": 0, "t": []})
+                    row["e"] += 1
+                if len(hit) > 3 and hit[2] and not _is_denial(d, b):
+                    row = _mod_row(e["agg"], hit[1], hit[2])
+                    row["e"] += 1
+                    _where(row, hit[3])[0] += 1
         if e["sub"]:
             if raw and not results and not d.get("isMeta"):
                 self._start_turn(hour, C.strip_noise(raw), ep, False)
@@ -389,6 +463,20 @@ class Reader(object):
         m = m if isinstance(m, dict) else {}
         mid = m.get("id") if isinstance(m.get("id"), str) and m.get("id") else None
         model = m.get("model") if isinstance(m.get("model"), str) else None
+        mk = _msg_model(model, m.get("usage"))
+        content = m.get("content")
+        uses = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"] \
+            if isinstance(content, list) else []         # odd content must not cost the message its usage
+        if mk is not None:
+            # The last answer so far, for a correction that may follow: its model and its
+            # last tool call. Kept also for a copy counted elsewhere, as the prompt after it counts here.
+            ans = e.get("ans")
+            if not ans or ans[2] != e.get("turn", 0):
+                ans = e["ans"] = [mk, None, e.get("turn", 0)]
+            ans[0] = mk
+            for b in uses:
+                if isinstance(b.get("name"), str):
+                    ans[1] = _tool_key(b["name"])
         key = _mid_key(mid) if mid else None
         if key is not None:
             owner = self.claimed.get(key)
@@ -440,14 +528,23 @@ class Reader(object):
         elif turn["msgs"] == 0:
             turn["msgs"] = 1                # answered, even if no usage was written
         names = []
-        for b in m.get("content") or []:
-            if not isinstance(b, dict) or b.get("type") != "tool_use":
-                continue
+        for b in uses:
             name = b.get("name") if isinstance(b.get("name"), str) else "?"
             inp = b.get("input") if isinstance(b.get("input"), dict) else {}
             names.append(name)
+            tkey = _tool_key(name)
+            before = turn["retry"]["retries"]
             A.retry_feed(turn["retry"], name, inp.get("file_path") or inp.get("notebook_path"),
                          inp.get("command"), mid or d.get("uuid"))
+            if mk is not None:
+                _mod_row(agg, day, mk)["c"] += 1
+                if name in A.EDIT_TOOLS:
+                    me = turn.setdefault("me", {})
+                    if turn["retry"]["retries"] > before and not me.get(mk):
+                        me[mk] = tkey               # this model's edit was the retry
+                    else:
+                        me.setdefault(mk, "")
+            server = None
             if name.startswith("mcp__"):
                 server, _, tool = name[5:].partition("__")
                 if server and tool:
@@ -456,10 +553,12 @@ class Reader(object):
                     row["c"] += 1
                     if tool not in row["t"]:
                         row["t"].append(tool)
-                    if isinstance(b.get("id"), str):
-                        e["pend"][b["id"]] = [server, day]
-                        while len(e["pend"]) > 300:
-                            del e["pend"][next(iter(e["pend"]))]
+                else:
+                    server = None
+            if isinstance(b.get("id"), str) and (server or mk is not None):
+                e["pend"][b["id"]] = [server, day, mk, tkey]
+                while len(e["pend"]) > PEND_MAX:
+                    del e["pend"][next(iter(e["pend"]))]
         if names:
             turn["kinds"] = "".join(sorted(set(turn["kinds"]) | set(A.tool_kinds(names))))
 
@@ -786,7 +885,21 @@ class Totals(object):
         self.act = {}           # day -> {activity: {"m", "turns", "edit", "clean"}}
         self.mcp = {}           # day -> {server: {"c", "e", "t": set}}
         self.peak = {}          # model -> largest context seen
+        self.mcost = {}         # day -> {"main": {model key: five counts}, "sub": {...}}
+        self.mod = {}           # day -> {model key: _new_mod() figures}
         self.from_ledger = set()
+
+
+def _merge_mod(dst, src):
+    """Add one day's figures per model (src) into dst."""
+    for mkey, row in (src or {}).items():
+        into = dst.setdefault(mkey, _new_mod())
+        for k in ("c", "e", "t", "k", "r", "x"):
+            into[k] += row.get(k, 0)
+        for tkey, trio in (row.get("w") or {}).items():
+            got = _where(into, tkey)
+            for i in range(3):
+                got[i] += trio[i]
 
 
 def add_up(cache, scope=None):
@@ -825,11 +938,16 @@ def add_up(cache, scope=None):
         agg = e["agg"]
         acts = [agg["act"]]
         edits = [agg.get("edits") or {}]
+        mods = [agg.get("mod") or {}]
         if e.get("open"):
-            last = {"act": {}, "edits": {}}         # the turn still running is filed for now
+            last = {"act": {}, "edits": {}, "mod": {}}  # the turn still running is filed for now
             close_turn(last, e["open"])
             acts.append(last["act"])
             edits.append(last["edits"])
+            mods.append(last["mod"])
+        for day, rows in [(d, r) for part in mods for d, r in part.items()]:
+            if not hidden_day(day):
+                _merge_mod(tot.mod.setdefault(day, {}), rows)
         for hour, pair in [(h, p) for part in edits for h, p in part.items()]:
             if not hidden_day(hour[:10]):
                 into = tot.edits.setdefault(hour, [0, 0])
@@ -842,6 +960,8 @@ def add_up(cache, scope=None):
             _merge(tot.hours.setdefault(hour, {}), models)
             row = tot.days.setdefault(day, {}).setdefault(sid, {"project": project, "m": {}})
             _merge(row["m"], models)
+            _merge(tot.mcost.setdefault(day, {}).setdefault("sub" if e.get("sub") else "main", {}),
+                   models)
         for hour, n in agg["calls"].items():
             if hidden_day(hour[:10]):
                 continue
@@ -886,13 +1006,17 @@ def use_ledger(tot, led, today):
         if entry.get("total", 0) <= _day_tokens(tot.days.get(day) or {}):
             continue
         rows = {}
+        split = {"main": {}, "sub": {}}
         for sid, sess in entry["sessions"].items():
             m = {}
             for key, (main, sub) in sess["models"].items():
                 _addc(m, key, P.counts(main))
                 _addc(m, key, P.counts(sub))
+                _addc(split["main"], key, P.counts(main))
+                _addc(split["sub"], key, P.counts(sub))
             rows[sid] = {"project": sess["project"], "m": m}
         tot.days[day] = rows
+        tot.mcost[day] = split
         tot.from_ledger.add(day)
     return tot
 
@@ -1033,6 +1157,74 @@ def mcp_rows(tot, days, limit=8):
     return rows[:limit]
 
 
+def _rate(part, whole):
+    return round(float(part) / whole, 4) if whole else None
+
+
+def model_rows(tot, days, acts, prices):
+    """One row per model with spend in these days, highest cost first.
+
+    Models are grouped by their display name, so a dated id and its plain id are
+    one row. acts: the period's activities (_cut), for where_most."""
+    by = {}
+
+    def group(key):
+        name = P.display_name(key, prices)
+        if name not in by:
+            by[name] = {"main": {}, "sub": {}, "act": {}, "mod": _new_mod()}
+        return by[name]
+
+    tools = {}                                  # MCP server -> its tool names, for readable labels
+    for d in days:
+        for side, models in (tot.mcost.get(d) or {}).items():
+            for key, counts in models.items():
+                _merge(group(key)[side], {key: counts})
+        for key, row in (tot.mod.get(d) or {}).items():
+            _merge_mod(group(key)["mod"], {"m": row})
+        for server, row in (tot.mcp.get(d) or {}).items():
+            tools.setdefault(server, set()).update(row["t"])
+    for cat, row in acts.items():
+        for key, counts in row["m"].items():
+            _merge(group(key)["act"].setdefault(cat, {}), {key: counts})
+    rows = []
+    for name, g in by.items():
+        main, sub = _usd(g["main"], prices), _usd(g["sub"], prices)
+        if main + sub <= 0:
+            continue
+        m = g["mod"].get("m") or _new_mod()
+        spent = [(c, _usd(models, prices)) for c, models in g["act"].items()]
+        spent = sorted([x for x in spent if x[1] > 0], key=lambda x: (-x[1], x[0]))
+        where = {}
+        for tkey, trio in m["w"].items():
+            if not tkey:
+                label, kind = NO_TOOL, "none"
+            elif tkey.startswith("mcp__"):
+                label, kind = mcp_label(tkey[5:], sorted(tools.get(tkey[5:], ()))), "mcp"
+            else:
+                label, kind = tkey, "tool"
+            into = where.setdefault(label, {"name": label, "kind": kind, "errors": 0,
+                                            "redone_edits": 0, "corrections": 0})
+            into["errors"] += trio[0]
+            into["redone_edits"] += trio[1]
+            into["corrections"] += trio[2]
+        where = [w for w in where.values() if w["errors"] or w["redone_edits"] or w["corrections"]]
+        where.sort(key=lambda w: (-w["errors"], -w["redone_edits"], -w["corrections"], w["name"]))
+        rows.append({"name": name, "usd": main + sub, "main_usd": round(main, 2), "sub_usd": round(sub, 2),
+                     "first_try": A.first_try_rate(m["t"], m["k"]), "edit_turns": m["t"],
+                     "tool_calls": m["c"], "tool_errors": m["e"], "error_rate": _rate(m["e"], m["c"]),
+                     "redone_edits": m["r"], "corrections": m["x"],
+                     "where_most": ", ".join(c for c, _u in spent[:3]) or None,
+                     "where": where[:MODEL_WHERE_ROWS]})
+    whole = sum(r["usd"] for r in rows)
+    rows.sort(key=lambda r: (-r["usd"], r["name"]))
+    for r in rows:
+        r["share"] = _share(r["usd"], whole)
+        r["usd"] = round(r["usd"], 2)
+    keys = ("name", "usd", "share", "main_usd", "sub_usd", "first_try", "edit_turns", "tool_calls",
+            "tool_errors", "error_rate", "redone_edits", "corrections", "where_most", "where")
+    return [dict((k, r[k]) for k in keys) for r in rows]
+
+
 def thin(steps, limit=TREND_POINTS):
     """Steps as at most `limit` groups of neighbouring steps, in order, none empty."""
     n = len(steps)
@@ -1109,6 +1301,7 @@ def period(tot, label, days, prev_days, prices, series, steps=None, detail_days=
         "activities": activity_rows(cur["acts"], prices),
         "projects": project_rows(tot, days, prices),
         "mcp_servers": mcp_rows(tot, days),
+        "models": model_rows(tot, days, cur["acts"], prices),
     }
 
 

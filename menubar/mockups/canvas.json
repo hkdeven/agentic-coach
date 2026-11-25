@@ -1,0 +1,20 @@
+{
+  "v": 3,
+  "createdOnFiles": {"v": 1, "at": "2026-11-23T09:45:00Z"},
+  "title": "Coach Menu Bar Mockups",
+  "launch": {"view": "focused", "file": "Prototype.dc.html"},
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {"x": 0, "y": 0, "w": 440, "h": 860, "title": "Panel, as agreed", "is_interactive": true},
+    "Extras.dc.html": {"x": 520, "y": 0, "w": 440, "h": 1200, "title": "Panel, final"},
+    "MenuBar.dc.html": {"x": 1040, "y": 0, "w": 440, "h": 360, "title": "Menu bar item states"},
+    "Page.dc.html": {"x": 1560, "y": 0, "w": 1280, "h": 1560, "title": "Full page, Overview", "expand": "fill"},
+    "Prototype.dc.html": {"x": 0, "y": 1680, "w": 1440, "h": 900, "title": "Prototype, click through", "is_interactive": true}
+  },
+  "order": ["Main.dc.html", "Extras.dc.html", "MenuBar.dc.html", "Page.dc.html", "Prototype.dc.html"],
+  "notes": {
+    "head": {"x": 0, "y": -300, "text": "Agentic Coach menu bar", "kind": "title1", "maxW": 2840},
+    "data": {"x": 1040, "y": 480, "w": 440, "fill": "blue", "text": "All numbers are samples.\n\nNot in the coach yet, to be built: the 5-hour and weekly limits, running sessions with context left, the activity split, tokens by hour, first-try edits and cache hit.\n\nAlready in the coach: cost, calls, sessions, tokens by day, corrections and the coach tip."}
+  },
+  "designSystems": []
+}

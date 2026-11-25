@@ -1339,67 +1339,6 @@ SERIES = [
 SERIES_BY_KEY = dict((s[0], s) for s in SERIES)
 
 
-def chart_svg(days, values, kind, title, threshold=None):
-    """Bar chart of one daily series. One scale places bars, grid and labels."""
-    W, H = 320.0, 132.0
-    L, R, T, B = 38.0, 8.0, 10.0, 20.0
-    pw, ph = W - L - R, H - T - B
-    present = [v for v in values if v is not None]
-    top = max(present) if present else 0
-    if threshold:
-        top = max(top, threshold * 1.1)
-    ymax = nice_max(top)
-    if kind == "int" and ymax < 4:
-        ymax = 4.0
-
-    def y(v):
-        return T + ph - ph * (v / ymax)
-
-    n = max(1, len(days))
-    slot = pw / n
-    bw = max(2.0, slot - 2.0)
-    parts = ['<svg class="ch" viewBox="0 0 %d %d" role="img" aria-label="%s, last %d days">'
-             % (W, H, esc(title), len(days))]
-    for frac in (0.0, 0.5, 1.0):
-        gy = y(ymax * frac)
-        parts.append('<line class="ch-grid" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f"/>'
-                     % (L, gy, W - R, gy))
-        parts.append('<text class="ch-lab" x="%.1f" y="%.1f" text-anchor="end">%s</text>'
-                     % (L - 5, gy + 3.5, esc(fmt_num(ymax * frac, kind))))
-    last = max([i for i, v in enumerate(values) if v is not None] or [-1])
-    for i, day in enumerate(days):
-        v = values[i]
-        x = L + slot * i + (slot - bw) / 2.0
-        label = "%s: %s" % (short_date(day), fmt_num(v, kind))
-        parts.append('<g class="b" data-r="%s">' % esc(label))
-        parts.append('<rect class="ch-hit" x="%.1f" y="%.1f" width="%.1f" height="%.1f"/>'
-                     % (L + slot * i, T, slot, ph))
-        if v is not None and v > 0:
-            bh = max(1.5, ph * (v / ymax))
-            parts.append('<rect class="ch-bar%s" x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="1.5"/>'
-                         % (" now" if i == last else "", x, T + ph - bh, bw, bh))
-        elif v is not None:
-            parts.append('<rect class="ch-zero" x="%.1f" y="%.1f" width="%.1f" height="1.5"/>'
-                         % (x, T + ph - 1.5, bw))
-        parts.append("</g>")
-    if threshold:
-        ty = y(threshold)
-        parts.append('<line class="ch-limit" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f"/>'
-                     % (L, ty, W - R, ty))
-        lab = "%s line" % fmt_num(threshold, kind)
-        lw = 6.0 * len(lab) + 6
-        parts.append('<rect class="ch-limit-bg" x="%.1f" y="%.1f" width="%.1f" height="12" rx="2"/>'
-                     % (L + 3, ty - 6, lw))
-        parts.append('<text class="ch-limit-lab" x="%.1f" y="%.1f">%s</text>'
-                     % (L + 6, ty + 3.5, esc(lab)))
-    if days:
-        parts.append('<text class="ch-lab" x="%.1f" y="%.1f">%s</text>' % (L, H - 5, esc(short_date(days[0]))))
-        parts.append('<text class="ch-lab" x="%.1f" y="%.1f" text-anchor="end">%s</text>'
-                     % (W - R, H - 5, esc(short_date(days[-1]))))
-    parts.append("</svg>")
-    return "".join(parts)
-
-
 def fmt_usd2(v):
     """Dollars with cents and thousands separators, as the Overview prints money."""
     return "${:,.2f}".format(max(0.0, float(v or 0)))
@@ -1727,66 +1666,359 @@ def digest_sessions(digest, limit=15):
     return rows[:limit]
 
 
-def _period_view(t):
+COST_PERIODS = ("today", "week", "month", "all")     # the Overview's periods, the same keys
+COST_DAILY_DAYS = 60        # All time: one point a day up to this many days, then one a week
+COST_MAX_DAYS = 3650        # All time never reaches back further (a ledger day from a wrong clock)
+COST_SESSIONS_MAX = 100     # sessions a period carries for "All N sessions"
+SPLIT_PARTS = 4             # one part a series colour; past that the smallest fold into Other
+TYPE_RATES = (("Input", (0,)), ("Output", (1,)), ("Cache read", (2,)), ("Cache write", (3, 4)))
+TYPE_NOTES = {
+    "Cache write": "Cache writes cost the most: long sessions resend their whole context.",
+    "Cache read": "Cache reads cost the most: every turn reads the whole context back.",
+    "Output": "Output costs the most: the answers and the files Claude writes.",
+    "Input": "Input costs the most: text sent without the prompt cache.",
+}
+
+
+def split_parts(rows, keep=SPLIT_PARTS):
+    """Rows with a name and a cost to the parts of a split bar, largest first. Rows that
+    cost nothing are left out; past `keep` rows the smallest fold into one part, Other,
+    so there are never more parts than series colours. share: part of the parts' total."""
+    rows = sorted([{"name": r.get("name"), "usd": _fin(r.get("usd"))} for r in rows or []
+                   if isinstance(r, dict) and (_fin(r.get("usd")) or 0) > 0],
+                  key=lambda r: -r["usd"])
+    if len(rows) > keep:
+        rest = rows[keep - 1:]
+        rows = rows[:keep - 1] + [{"name": "Other", "usd": sum(r["usd"] for r in rest),
+                                   "folded": len(rest)}]
+    total = sum(r["usd"] for r in rows)
+    return [{"name": cut(str(r["name"] or "?"), 60), "usd": round(r["usd"], 2),
+             "share": round(r["usd"] / total, 4), "folded": r.get("folded", 0)} for r in rows]
+
+
+def _price(v):
+    return "$%d" % v if abs(v - round(v)) < 1e-9 else "$%.2f" % v
+
+
+def price_ranges(models, prices=None):
+    """{token type: "$3.75 to $6 per M"}: the list prices of each type across the priced
+    models that have tokens in the period. A type no priced model was used for has none."""
+    seen = {}
+    for r in models or []:
+        rates = P.rates(r.get("model"), prices) if r.get("tokens") else None
+        if rates is None:
+            continue
+        for name, idx in TYPE_RATES:
+            seen.setdefault(name, []).extend(rates[i] for i in idx)
+    out = {}
+    for name, vals in seen.items():
+        lo, hi = min(vals), max(vals)
+        out[name] = ("%s per M" % _price(lo) if lo == hi
+                     else "%s to %s per M" % (_price(lo), _price(hi)))
+    return out
+
+
+def _period_view(t, prices=None):
+    ranges = price_ranges(t["by_model"], prices)
+    top = max(t["by_type"], key=lambda r: r["usd"]) if t["by_type"] else None
     return {"usd": round(t["usd"], 2), "main_usd": round(t["main_usd"], 2),
             "sub_usd": round(t["sub_usd"], 2), "tokens": t["tokens"], "out": t["out"],
             "days": t["days"], "unpriced_tokens": t["unpriced_tokens"],
-            "by_type": [{"type": r["type"], "tokens": r["tokens"], "usd": round(r["usd"], 2)}
-                        for r in t["by_type"]],
-            "by_project": [{"name": cut(r["name"], 80), "usd": round(r["usd"], 2),
-                            "main_usd": round(r["main_usd"], 2), "sub_usd": round(r["sub_usd"], 2),
-                            "tokens": r["tokens"], "sessions": r["sessions"],
-                            "scheduled": r["scheduled"], "unpriced_tokens": r["unpriced_tokens"]}
-                           for r in t["by_project"][:60]],
-            "by_model": [{"name": cut(r["name"], 60), "tokens": r["tokens"],
-                          "usd": round(r["usd"], 2), "priced": r["priced"]}
-                         for r in t["by_model"][:30]]}
+            "by_type": [{"type": r["type"], "tokens": r["tokens"], "usd": round(r["usd"], 2),
+                         "price": ranges.get(r["type"])} for r in t["by_type"]],
+            "type_note": TYPE_NOTES.get(top["type"]) if top and top["usd"] > 0 else None,
+            "split": {"model": split_parts(t["by_model"]),
+                      "project": split_parts(t["by_project"]),
+                      "agent": split_parts([{"name": "Main sessions", "usd": t["main_usd"]},
+                                            {"name": "Subagents", "usd": t["sub_usd"]}])}}
 
 
-def load_cost(reports_dir, today, ledger_path=None, hide=NO_HIDE):
-    """Everything the Cost view shows, from the ledger. None when there is no ledger data yet."""
+def cost_days(key, today, since):
+    """The days a Cost period covers, oldest first: the Overview's periods, ending today."""
+    if key == "today":
+        return [today]
+    if key == "week":
+        return L.day_range(day_shift(today, -6), today)
+    if key == "month":
+        return L.day_range(day_shift(today, -29), today)
+    if not since or since > today:
+        return []
+    return L.day_range(max(since, day_shift(today, -(COST_MAX_DAYS - 1))), today)
+
+
+def year_day(iso, today):
+    """Nov 23, or Nov 23, 2025 for a day in another year than today."""
+    return nice_day(iso) + ("" if iso[:4] == today[:4] else ", " + iso[:4])
+
+
+def digest_titles(reports_dir, hide):
+    """({first 8 characters of a session id: its title}, ids the exclude rules leave out)
+    from every daily digest on disk.
+
+    A title does not depend on the account or date settings, so a digest counted under
+    other settings (an older scope_sig) still lends its titles. The exclude rules apply
+    as they do to any digest: a left-out session gives no title and its id is returned,
+    so no row is shown for it either. A later digest's title wins (a session can be renamed)."""
+    out, gone = {}, set()
+    for path in sorted(glob.glob(os.path.join(reports_dir, "digests", "daily-*.json"))):
+        m = re.match(r"^daily-(\d{4}-\d{2}-\d{2})\.json$", os.path.basename(path))
+        if not m or hide.scope.date_hidden(m.group(1)):
+            continue
+        raw = read_json(path)
+        if not isinstance(raw, dict):
+            continue
+        try:
+            digest, dropped = visible_digest(raw, hide)
+            gone |= dropped
+            for s in digest.get("sessions") or []:
+                if not isinstance(s, dict):
+                    continue
+                sid = str(s.get("id") or "")[:8].lower()
+                title = cut(str(s.get("title") or ""), 60)
+                if sid and title and not hide.text(title):
+                    out[sid] = title
+        except (AttributeError, TypeError, ValueError, KeyError, OverflowError):
+            continue
+    return out, gone
+
+
+def cache_titles(hide):
+    """({first 8 characters of a session id: its title}, ids the exclude rules leave out)
+    from the live feed's cache (<coach home>/live-cache.json): the latest custom title,
+    else the latest AI title. A session the cache marks hidden, or that the exclude rules
+    cover now, gives none and its id is returned."""
+    cache = read_json(os.path.join(C.coach_home(), "live-cache.json"))
+    files = cache.get("files") if isinstance(cache, dict) else None
+    out, gone = {}, set()
+    if not isinstance(files, dict):
+        return out, gone
+    current = (cache.get("sig") or "") == hide.scope.sig()
+    for entry in files.values():
+        if not isinstance(entry, dict) or entry.get("sub") or entry.get("skip"):
+            continue
+        meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+        sid = str(entry.get("sid") or "")
+        if entry.get("hidden"):          # the cache tests folder and titles too
+            if sid and current:          # a flag set under the settings in force leaves the row out
+                gone.add(sid[:8].lower())
+            continue
+        ctitles = [t for t in meta.get("ctitles") or [] if isinstance(t, str) and t.strip()]
+        titles = [t for t in meta.get("titles") or [] if isinstance(t, str) and t.strip()]
+        title = cut(C.one_line(ctitles[-1] if ctitles else titles[-1] if titles else "", 80), 60)
+        where = [str(entry.get("project") or ""), str(meta.get("cwd") or ""), str(entry.get("pdir") or "")]
+        if not sid:
+            continue
+        if hide.session(sid, ctitles + titles + where):
+            gone.add(sid[:8].lower())
+        elif title and not hide.text(title):
+            out[sid[:8].lower()] = title
+    return out, gone
+
+
+def period_sessions(led, days, hide, titles, today, prices=None):
+    """The sessions of the period's days, most costly first; and how many there are in all.
+    Read from the ledger, which has every day and holds no left-out work. A session that
+    ran on several days is one row: its tokens added up and priced together, under the
+    latest day it ran. titles: {first 8 characters of an id: title}; a session without
+    one is called Session and its id."""
+    prices = prices or P.load_prices()
+    by_id = {}
+    for day in days:
+        entry = led["days"].get(day)
+        if not entry or hide.scope.date_hidden(day):
+            continue
+        for sid, sess in entry["sessions"].items():
+            if hide.session(sid, [sess["project"]]):
+                continue
+            row = by_id.get(sid)
+            if row is None:
+                row = by_id[sid] = {"main": {}, "sub": {}, "day": day, "project": sess["project"],
+                                    "scheduled": False}
+            if day >= row["day"]:
+                row["day"], row["project"] = day, sess["project"]
+            row["scheduled"] = row["scheduled"] or sess["scheduled"]
+            for model, (main, sub) in sess["models"].items():
+                P.add(row["main"].setdefault(model, [0] * P.N), main)
+                P.add(row["sub"].setdefault(model, [0] * P.N), sub)
+    rows = []
+    for sid, r in by_id.items():
+        cm, cs = P.cost(r["main"], prices), P.cost(r["sub"], prices)
+        tokens = sum(cm["tokens"]) + sum(cs["tokens"])
+        priced = not tokens or tokens > cm["unpriced_tokens"] + cs["unpriced_tokens"]
+        rows.append({"id": sid[:8], "title": titles.get(sid[:8].lower(), ""), "day": r["day"],
+                     "when": year_day(r["day"], today), "project": cut(r["project"] or "?", 60),
+                     "kind": "scheduled" if r["scheduled"] else "interactive", "tokens": tokens,
+                     "usd": round(cm["usd"] + cs["usd"], 2) if priced else None,
+                     "sub_usd": round(cs["usd"], 2) if priced else None})
+    rows.sort(key=lambda r: (-(r["usd"] or 0), -r["tokens"], r["id"]))
+    return [dict((k, v) for k, v in r.items() if k != "tokens")
+            for r in rows[:COST_SESSIONS_MAX]], len(rows)
+
+
+def ledger_series(led, days):
+    """[(local ISO time, dollars)] a point a day, or a point a week (its Monday) past
+    COST_DAILY_DAYS days, and the unit: the fallback when the live feed has no series."""
+    values = [(d, s["usd"] or 0.0) for d, s in zip(days, L.daily_series(led, days))]
+    if len(days) <= COST_DAILY_DAYS:
+        return [(d + "T00:00", v) for d, v in values], "day"
+    weeks = []
+    for d, v in values:
+        m = L.monday(d)
+        if weeks and weeks[-1][0] == m:
+            weeks[-1][1] += v
+        else:
+            weeks.append([m, v])
+    return [(m + "T00:00", v) for m, v in weeks], "week"
+
+
+def load_cost(reports_dir, today, ledger_path=None, hide=NO_HIDE, live=None):
+    """Everything the Cost view shows, from the ledger, for each of the Overview's four
+    periods; and the cost graphs as <template> elements (cost_graph), drawn from the same
+    ledger days so a graph adds up to the figures beside it. Today alone is drawn by the
+    hour from the live feed when it has that series (the ledger keeps days, not hours).
+    (None, "") when there is no ledger data yet."""
     try:
         led, _existed = L.load(ledger_path)
         led = L.visible(led, hide.scope)
-        days = sorted(d for d in led["days"] if d < today) or sorted(led["days"])
-        if not days:
+        if not led["days"]:
             return None, ""
-        anchor = days[-1]
-        per = L.periods(led, anchor)
-        window = [day_shift(today, -i) for i in range(TREND_DAYS, 0, -1)]
-        series = L.daily_series(led, window)
+        prices = P.load_prices()
+        since = led.get("first_day") or min(led["days"])
+        data = {"since": since, "pricesDate": P.prices_date(prices), "periods": {}}
+        series = {}
+        for key in COST_PERIODS:
+            days = cost_days(key, today, since)
+            t = L.totals(led, days[0], days[-1], prices) if days else L.totals(led, "9999-99-99", None, prices)
+            data["periods"][key] = {"t": _period_view(t, prices)}
+            series[key] = ledger_series(led, days) if days else ([], "day")
     except (AttributeError, TypeError, ValueError, KeyError, OverflowError, OSError):
         return None, ""
-    digest, _seen = read_digest(os.path.join(reports_dir, "digests", "daily-%s.json" % anchor), hide)
-    try:
-        sessions = digest_sessions(digest)
-    except (AttributeError, TypeError, ValueError, KeyError, OverflowError):
-        sessions = []
-    data = {"since": per["since"], "pricesDate": per["prices_date"], "day": anchor,
-            "periods": [
-                {"key": "day", "label": "Day", "title": long_date(anchor), "t": _period_view(per["day"])},
-                {"key": "week7", "label": "Last 7 days",
-                 "title": "%s to %s" % (short_date(day_shift(anchor, -6)), short_date(anchor)),
-                 "t": _period_view(per["week7"])},
-                {"key": "calweek", "label": "This week",
-                 "title": "Monday %s to %s" % (short_date(L.monday(anchor)), short_date(anchor)),
-                 "t": _period_view(per["calweek"])},
-                {"key": "all", "label": "All time",
-                 "title": "Since %s" % long_date(per["since"]), "t": _period_view(per["all"])}],
-            "sessions": sessions}
+    titles, gone = guarded(cache_titles, hide) or ({}, set())
+    more, dropped = guarded(digest_titles, reports_dir, hide) or ({}, set())
+    titles.update(more)                                                 # a digest's title wins
+    seen = hide.plus(gone | dropped)
+    # The ledger is purged only by id, project name and date: rows written under other
+    # settings may hold work left out now (another account), so no session is listed
+    # from it until the next recap has read it again under the settings in force.
+    current = led.get("exclude_sig", "") == hide.scope.sig()
+    for key in COST_PERIODS:
+        got = guarded(period_sessions, led, cost_days(key, today, since), seen, titles, today,
+                      prices) if current else None
+        rows, count = got if got else ([], 0)
+        data["periods"][key].update({"sessions": rows, "session_count": count})
     if hide.scope.only:
         data["oneAccount"] = True          # a quiet line; never which account
-    values = [s["usd"] for s in series]
-    title = "Cost per day, API-equivalent"
-    latest = "no data"
-    for d, v in zip(reversed(window), reversed(values)):
-        if v is not None:
-            latest = "%s: %s" % (short_date(d), fmt_num(v, "usd"))
-            break
-    chart = ('<figure class="chart cost-chart"><figcaption><span class="ch-title">%s</span>'
-             '<span class="readout" data-default="%s">%s</span></figcaption>%s</figure>'
-             % (esc(title), esc(latest), esc(latest), chart_svg(window, values, "usd", title)))
-    return data, chart
+    graphs = []
+    feed = (live or {}).get("periods") or {}
+    for key in COST_PERIODS:
+        # the feed knows nothing of a date left out or of one account only: then the ledger alone
+        p = feed.get(key) if key == "today" and not (hide.scope.only or hide.scope.date_hidden(today)) else None
+        hours = bool(p and p.get("series") and p.get("series_unit") == "hour")
+        if hours:
+            pts, unit = [(r["t"], r["usd"]) for r in p["series"]], "hour"
+        else:
+            pts, unit = series[key]
+        graph = guarded(cost_graph, key, pts, unit, today, (live or {}).get("updated")) or ""
+        if key == "today":
+            data["periods"][key]["live_hours"] = hours and bool(graph)
+        graphs.append(graph)
+    return data, "".join(graphs)
+
+
+def _point_names(t, unit, today=""):
+    """What a point of the cost graph is called in its readout: 14:00, Week of Nov 3,
+    Thu Nov 20; with the year when it is not today's (Week of Dec 29, 2025)."""
+    if unit == "hour":
+        return t[11:16]
+    if unit == "week":
+        return "Week of " + year_day(t, today or t)
+    y, m, d = date_parts(t)
+    wd = time.localtime(time.mktime((y, m, d, 12, 0, 0, 0, 0, -1))).tm_wday
+    return "%s %s" % (WEEKDAYS[wd][:3], year_day(t, today or t))
+
+
+def cost_graph(key, points, unit, today, updated=None):
+    """The Cost tab's graph of one period as a <template id="cg-<period>">: a thin stem and a
+    dot a point (an hour, a day or a week), the dots above the period's average a little
+    brighter, the peak dot amber with "Peak $X" over it, the average as a faint dashed line
+    labelled at the right. Each point is a hover and focus target whose data the script reads
+    for the readout (its name, its cost, above or below the average). Drawn to be stretched
+    (preserveAspectRatio none): strokes keep their width and every dot is a round line cap."""
+    pts = [(t, max(0.0, float(v or 0))) for t, v in points if _iso(t)]
+    n = len(pts)
+    if not n:
+        return ""
+    values = [v for _t, v in pts]
+    avg = sum(values) / n
+    hi = max(values)
+    peak = values.index(hi) if hi > 0 else None
+    top = scale_top(hi * 1.08, "dec") if hi > 0 else 1.0     # a round top whose half is round too
+    W, H, T, B = 1000.0, 200.0, 8.0, 192.0
+    word = {"hour": "an hour", "week": "a week"}.get(unit, "a day")
+
+    def x(i):
+        return W * (i + 0.5) / n
+
+    def y(v):
+        return B - (B - T) * v / top
+
+    names = [_point_names(t, unit, today) for t, _v in pts]
+    label = "Cost per %s, %s: average %s %s" % (unit if unit in ("hour", "week") else "day",
+                                               key if key != "all" else "all time",
+                                               axis_usd(avg), word)
+    if peak is not None:
+        label += ", peak %s, %s" % (axis_usd(hi), names[peak])
+    svg = ['<svg class="cg" viewBox="0 0 %d %d" preserveAspectRatio="none" role="img" '
+           'aria-label="%s" tabindex="0">' % (W, H, esc(label))]
+    for gy in (T, (T + B) / 2.0):
+        svg.append('<line class="lg-grid" x1="0" y1="%.1f" x2="%d" y2="%.1f"/>' % (gy, W, gy))
+    hits, marks = [], []
+    for i, (t, v) in enumerate(pts):
+        cls = "pk" if i == peak else "hi" if v > avg else "lo"
+        if i == n - 1:
+            cls += " last"
+        px, py = x(i), y(v)
+        hits.append('<g class="b" data-r="%s" data-v="%s" data-n="%s" data-x="%.2f">'
+                    '<rect class="cg-band" x="%.1f" y="0" width="%.1f" height="%d"/></g>'
+                    % (esc(names[i]), esc(fmt_usd2(v)),
+                       "Above your average" if v > avg else "Below your average",
+                       px / 10.0, W * i / n, W / n, H))
+        marks.append('<path class="cg-stem %s" d="M%.1f %.1fV%.1f"/>' % (cls, px, B, py))
+        marks.append('<path class="cg-ring %s" d="M%.1f %.1fh0"/><path class="cg-dot %s" d="M%.1f %.1fh0"/>'
+                     % (cls, px, py, cls, px, py))
+    svg.extend(hits)
+    svg.append('<line class="cg-avg" x1="0" y1="%.1f" x2="%d" y2="%.1f"/>' % (y(avg), W, y(avg)))
+    svg.append('<line class="lg-base" x1="0" y1="%.1f" x2="%d" y2="%.1f"/>' % (B, W, B))
+    svg.extend(marks)
+    svg.append("</svg>")
+    scale = "".join('<span style="top:%.1f%%">%s</span>' % (100.0 * gy / H, esc(axis_usd(v)))
+                    for gy, v in ((T, top), ((T + B) / 2.0, top / 2.0), (B, 0)))
+    over = []
+    if peak is not None:
+        over.append('<span class="cg-peak" style="left:%.1f%%;top:%.1f%%">Peak %s</span>'
+                    % (min(max(x(peak) / 10.0, 4.0), 96.0), 100.0 * y(hi) / H, esc(axis_usd(hi))))
+    over.append('<span class="cg-avg-lab" style="top:%.1f%%">average %s %s</span>'
+                % (100.0 * y(avg) / H, esc(axis_usd(avg)), word))
+    marks_at = sorted(set([0, (n - 1) // 2, n - 1]))
+    axis = []
+    for i in marks_at:
+        t = pts[i][0]
+        name = t[11:16] if unit == "hour" else nice_day(t) if t[:4] == pts[-1][0][:4] else year_day(t, "")
+        if i == n - 1 and n > 1:
+            if unit == "hour" and updated and t[:13] == str(updated)[:13]:
+                name = "Now"
+            elif unit == "week" and t[:10] == L.monday(today):
+                name = "This week"
+            elif unit == "day" and t[:10] == today:
+                name = "Today"
+        axis.append('<span style="left:%.1f%%">%s</span>' % (x(i) / 10.0, esc(name)))
+    head = ('<span class="cg-sum" data-unit="%s">Average %s %s, peak <b>%s</b></span>'
+            % (esc(unit), esc(axis_usd(avg)), word, esc(axis_usd(hi))))
+    return ('<template id="cg-%s"><div class="cg-wrap">%s<div class="lg-plot"><div class="lg-y" '
+            'aria-hidden="true">%s</div><div class="cg-area">%s%s<div class="cg-tip" hidden aria-live="polite">'
+            '<div class="d"></div><div class="v"></div><div class="n"></div></div></div></div>'
+            '<div class="lg-x" aria-hidden="true">%s</div></div></template>'
+            % (key, head, scale, "".join(svg), "".join(over), "".join(axis)))
 
 
 def parse_cost_block(lines, hide=NO_HIDE):
@@ -2282,6 +2514,91 @@ def _trend(v, check):
     return [check(x) for x in v[:12]] if isinstance(v, list) else None
 
 
+MODEL_ERR_WARN = 0.02       # tool errors as a share of the model's tool calls: amber from here
+MODEL_ERR_CRIT = 0.04       # and red from here
+MODEL_REDO_WARN = 10        # redone edits: amber from here
+MODEL_ROWS = 4              # By model shows the top 4 by cost, a series colour each; the rest fold into one line
+
+
+def _count(n, word):
+    n = _half_up(n)
+    return "{:,} {}{}".format(n, word, "" if n == 1 else "s")
+
+
+def error_level(rate):
+    """How a model's tool error rate is coloured: crit from 4%, warn from 2%, else None."""
+    if rate is None:
+        return None
+    return "crit" if rate >= MODEL_ERR_CRIT else "warn" if rate >= MODEL_ERR_WARN else None
+
+
+def live_models(v, hide=NO_HIDE):
+    """The feed's per-model rows for the Overview's By model card, cleaned. None when the
+    feed has no models list (the card is then hidden). The top MODEL_ROWS by cost only.
+    Each row's error rate is the feed's,
+    else its errors over its tool calls; the colour levels are decided here. The `where`
+    rows can name an MCP server, which is the person's: one the rules cover is left out."""
+    if not isinstance(v, list):
+        return None
+    out = []
+    for r in _rows(v, 30):
+        calls, errors, redone = _fin(r.get("tool_calls")), _fin(r.get("tool_errors")), _fin(r.get("redone_edits"))
+        rate = _rate(r.get("error_rate"))
+        if rate is None and errors is not None and calls:
+            rate = _rate(errors / calls)
+        where = [{"name": _txt(w.get("name"), 60) or "?", "kind": _txt(w.get("kind"), 20),
+                  "errors": _fin(w.get("errors")), "redone_edits": _fin(w.get("redone_edits")),
+                  "corrections": _fin(w.get("corrections"))}
+                 for w in _rows(r.get("where"), 30) if not hide.text(w.get("name"))][:12]
+        out.append({"name": _txt(r.get("name"), 60) or "?", "usd": _fin(r.get("usd")),
+                    "share": _rate(r.get("share")), "main_usd": _fin(r.get("main_usd")),
+                    "sub_usd": _fin(r.get("sub_usd")), "first_try": _rate(r.get("first_try")),
+                    "edit_turns": _fin(r.get("edit_turns")), "tool_calls": calls,
+                    "tool_errors": errors, "error_rate": rate, "error_level": error_level(rate),
+                    "redone_edits": redone, "corrections": _fin(r.get("corrections")),
+                    "rework_level": "warn" if redone is not None and redone >= MODEL_REDO_WARN else None,
+                    "where_most": None if hide.text(r.get("where_most")) else _txt(r.get("where_most"), 120),
+                    "where": add_heat(where, "errors")})
+    out.sort(key=lambda m: -(m["usd"] or 0))
+    return add_heat(out[:MODEL_ROWS], "usd")
+
+
+def smaller_models(v):
+    """The models past the top MODEL_ROWS by cost, as one line: how many and what they cost."""
+    if not isinstance(v, list):
+        return None
+    costs = sorted([_fin(r.get("usd")) or 0 for r in _rows(v, 30)], reverse=True)[MODEL_ROWS:]
+    return {"count": len(costs), "usd": round(sum(costs), 2)} if costs else None
+
+
+def rework_note(models):
+    """The one line under the By model table: the model with the most rework (redone edits
+    plus corrections) and where it happened, from its `where` rows. None when no model has any."""
+    best = None
+    for m in models or []:
+        score = (m["redone_edits"] or 0) + (m["corrections"] or 0)
+        if score > 0 and (best is None or score > best[0]):
+            best = (score, m)
+    if best is None:
+        return None
+    m = best[1]
+    redo, corr, errs = m["redone_edits"] or 0, m["corrections"] or 0, m["tool_errors"] or 0
+    rest = []
+    redid = [w for w in m["where"] if (w["redone_edits"] or 0) > 0]
+    if redo and redid:
+        w = max(redid, key=lambda w: w["redone_edits"])
+        rest.append("%s of its %s were in %s." % ("{:,}".format(_half_up(w["redone_edits"])),
+                                                   _count(redo, "redone edit"), w["name"]))
+    else:
+        rest.append("%s and %s in all." % (_count(redo, "redone edit"), _count(corr, "correction")))
+    failed = [w for w in m["where"] if (w["errors"] or 0) > 0]
+    if errs and failed:
+        w = max(failed, key=lambda w: w["errors"])
+        rest.append("Its %s calls fail most: %s of %s." % (
+            w["name"], "{:,}".format(_half_up(w["errors"])), _count(errs, "error")))
+    return {"model": m["name"], "lead": "Most rework: %s." % m["name"], "rest": " ".join(rest)}
+
+
 def live_period(p, label, hide=NO_HIDE):
     series = []
     for r in _rows(p.get("series"), LIVE_SERIES_MAX):
@@ -2295,7 +2612,10 @@ def live_period(p, label, hide=NO_HIDE):
     # those blocks say so ("Detail from Nov 9").
     since, detail = _iso(p.get("since")), _iso(p.get("detail_since"))
     unit = p.get("series_unit")
+    models = live_models(p.get("models"), hide)
     return {
+        "models": models, "model_note": rework_note(models),
+        "models_more": smaller_models(p.get("models")),
         "label": _txt(p.get("label"), 40) or label,
         "detail_from": nice_day(detail) if since and detail and detail[:10] > since[:10] else None,
         "cost_usd": _fin(p.get("cost_usd")), "prev_cost_usd": _fin(p.get("prev_cost_usd")),
@@ -2530,21 +2850,19 @@ def build_page(reports_dir, projects_dir=None, today=None, scan=True, ledger_pat
         one = ('<p class="onething"><span class="one-label">Do today</span>'
                '<span class="one-text">%s</span></p>' % md_inline(cap(dailies[0]["items"][0]["do"])))
 
-    cost, cost_chart = load_cost(reports_dir, today, ledger_path, hide)
-    if cost:
-        cost_html = cost_chart
-    else:
-        cost_html = ('<div class="empty"><p class="empty-title">No cost data yet.</p>'
-                     '<p>Costs appear after the next recap, which also records every day still '
-                     'in your transcripts.</p></div>')
     live = guarded(live_view, guarded(load_live), hide)
+    cost, cost_graphs = load_cost(reports_dir, today, ledger_path, hide, live)
+    cost_html = "" if cost else (
+        '<div class="empty"><p class="empty-title">No cost data yet.</p>'
+        '<p>Costs appear after the next recap, which also records every day still '
+        'in your transcripts.</p></div>')
     data = {"dailies": dailies, "weeklies": weeklies,
             "contextLine": CONTEXT_LINE, "cost": cost, "live": live}
     name = (guarded(C.load_config) or {}).get("display_name") or C.DEFAULT_DISPLAY_NAME
     values = {"NAME": esc(name), "NEWEST": esc(newest), "ONE": one, "TRENDS": render_trends(trend, today),
               "BASELINE": render_baseline(summary, details), "DATA": json_for_script(data),
               "COST": cost_html, "PROGRESS": progress, "SETUP": setup, "EXCERPTS": excerpts,
-              "GRAPHS": guarded(overview_graphs, live) or ""}
+              "GRAPHS": (guarded(overview_graphs, live) or "") + cost_graphs}
     page = re.sub(r"\{\{(NAME|NEWEST|ONE|TRENDS|BASELINE|DATA|COST|PROGRESS|SETUP|EXCERPTS|GRAPHS)\}\}",
                   lambda m: values[m.group(1)], PAGE)
     return clean(page), card(dailies)
@@ -2568,6 +2886,9 @@ PAGE = r"""<title>{{NAME}}</title>
   --heat-mid: #eda100;
   --bar: #9cc0ea; --bar-now: #2a78d6;
   --pill: #0b0b0b; --pill-text: #fcfcfb; --hover: #eeede8;
+  /* series colours (set B), for the parts of a split and the models, never for status: each
+     at least 3.6:1 on the card; above the average a cost dot is a shade stronger (--dot-hi) */
+  --s1: #4f46e5; --s2: #8b5cf6; --s3: #0d9488; --s4: #0284c7; --s0: #7c7b75; --dot-hi: #1a5fb4;
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
   --mono: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
   --code: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -2584,6 +2905,7 @@ PAGE = r"""<title>{{NAME}}</title>
     --heat-mid: #c98500;
     --bar: #25507f; --bar-now: #3987e5;
     --pill: #f0efec; --pill-text: #1a1a19; --hover: #262624;
+    --s1: #6366f1; --s2: #a78bfa; --s3: #2dd4bf; --s4: #38bdf8; --s0: #8f8e85; --dot-hi: #5aa0f0;
     color-scheme: dark;
   }
 }
@@ -2597,6 +2919,7 @@ PAGE = r"""<title>{{NAME}}</title>
   --heat-mid: #c98500;
   --bar: #25507f; --bar-now: #3987e5;
   --pill: #f0efec; --pill-text: #1a1a19; --hover: #262624;
+  --s1: #6366f1; --s2: #a78bfa; --s3: #2dd4bf; --s4: #38bdf8; --s0: #8f8e85; --dot-hi: #5aa0f0;
   color-scheme: dark;
 }
 *, *::before, *::after { box-sizing: border-box; }
@@ -2751,18 +3074,8 @@ td.wide { min-width: 20ch; overflow-wrap: anywhere; }
 .chart figcaption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 10px; align-items: baseline; padding: 0 2px 4px; }
 .ch-title { font-size: 13px; font-weight: 600; }
 .readout { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; font-family: var(--mono); }
-svg.ch { display: block; width: 100%; height: auto; }
-.ch-grid { stroke: var(--grid); stroke-width: 1; }
-.ch-lab { fill: var(--ink-3); font-family: var(--mono); font-size: 9.5px; }
 .ch-hit { fill: transparent; }
-.ch-bar { fill: var(--bar); }
-.ch-bar.now { fill: var(--bar-now); }
-.ch-zero { fill: var(--line); }
-.b:hover .ch-bar { fill: var(--bar-now); }
 .b:hover .ch-hit { fill: var(--sunken); }
-.ch-limit { stroke: var(--warn); stroke-width: 1.2; stroke-dasharray: 4 3; }
-.ch-limit-bg { fill: var(--surface); }
-.ch-limit-lab { fill: var(--warn); font-family: var(--mono); font-size: 9.5px; font-weight: 500; }
 
 table { border-collapse: collapse; font-size: 13px; width: 100%; }
 th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
@@ -2770,28 +3083,103 @@ th { color: var(--ink-3); font-weight: 550; font-size: 11.5px; white-space: nowr
 td { font-variant-numeric: tabular-nums; min-width: 6ch; }
 table.num td, table.num th { white-space: nowrap; }
 td.n, th.n { text-align: right; white-space: nowrap; }
-th button.sort { all: unset; cursor: pointer; font: inherit; color: inherit; display: inline-block; min-height: 36px; line-height: 36px; min-width: 36px; }
-th button.sort:hover { color: var(--accent); }
-th button.sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
-th[aria-sort="ascending"] button.sort::after { content: " \2191"; }
-th[aria-sort="descending"] button.sort::after { content: " \2193"; }
-td.barcell { width: 22%; min-width: 60px; vertical-align: middle; }
-.share { display: block; height: 8px; border-radius: 0 4px 4px 0; background: var(--bar); min-width: 2px; }
-.cost-chart { max-width: 520px; }
 .panel-t { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 4px 4px 0; min-width: 0; }
 .panel-t table tr:last-child td { border-bottom: 0; }
 .panel-t td { vertical-align: middle; }
-.cost-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px 16px; align-items: start; }
-.cost-grid > div { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.split { display: flex; gap: 2px; height: 10px; max-width: 520px; }
-.split span { display: block; height: 100%; min-width: 2px; background: var(--bar-now); border-radius: 2px; }
-.split span.s2 { background: var(--bar); }
-.split-key { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 13px; color: var(--ink-2); }
-.split-key i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--bar-now); margin-right: 6px; }
-.split-key i.s2 { background: var(--bar); }
-.split-key b { color: var(--ink); font-variant-numeric: tabular-nums; }
 .totals-line { color: var(--ink-2); font-size: 14px; max-width: 80ch; }
-td a.sid { font-family: var(--mono); }
+/* Cost tab, as its approved mockup: the summary row and the split card, the cost graph
+   (a stem and a dot a point), then Top sessions beside By token type. */
+.sw1 { color: var(--s1); } .sw2 { color: var(--s2); } .sw3 { color: var(--s3); } .sw4 { color: var(--s4); } .sw0 { color: var(--s0); }
+.cs-top-block { display: flex; flex-direction: column; gap: 12px; padding: 4px 2px; }
+.cs-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.cs-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.cs-head .lab { font-size: 12.5px; color: var(--ink-2); }
+.seg.cs-seg { display: inline-flex; background: var(--bg); }
+.cs-seg button { padding: 4px 11px; font-size: 12px; }
+.cs-bar { display: flex; height: 16px; gap: 3px; }
+.cs-bar i { display: block; min-width: 5px; border-radius: 5px; background: linear-gradient(180deg, color-mix(in srgb, currentColor 70%, #ffffff), currentColor); }
+.cs-key { display: flex; flex-wrap: wrap; gap: 8px 26px; }
+.cs-key > span { display: inline-flex; align-items: baseline; gap: 7px; font-size: 13px; min-width: 0; }
+.cs-key i, .om-sw { flex: none; width: 10px; height: 10px; border-radius: 3px; background: currentColor; align-self: center; }
+.cs-key .nm { color: var(--ink-2); overflow-wrap: anywhere; }
+.cs-key b { font-weight: 650; }
+.cs-key .pc { font-size: 12px; color: var(--ink-3); }
+.cg-card { padding: 14px 18px 10px; gap: 6px; }
+.cg-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 10px; }
+.cg-head h3 { font-size: 14px; font-weight: 600; }
+.cg-sum { font-size: 12px; color: var(--ink-3); }
+.cg-sum b { color: var(--warn); font-weight: 600; }
+.cg-area { position: relative; }
+.cg { display: block; width: 100%; height: 230px; overflow: visible; }
+.cg:focus-visible { outline-offset: 6px; }
+.cg * { vector-effect: non-scaling-stroke; }
+.cg-band { fill: var(--ink); fill-opacity: 0; }
+.cg .b:hover .cg-band, .cg .b.on .cg-band { fill-opacity: 0.05; }
+.cg-avg { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 3 4; stroke-opacity: 0.7; pointer-events: none; }
+.cg-stem, .cg-ring, .cg-dot { fill: none; stroke-linecap: round; pointer-events: none; }
+.cg-stem { stroke: var(--accent); stroke-width: 2; stroke-opacity: 0.55; }
+.cg-ring { stroke: var(--surface); stroke-width: 11; }
+.cg-ring.last { stroke-width: 13; }
+.cg-ring.pk { stroke-width: 15; }
+.cg-dot { stroke: var(--accent); stroke-width: 8; }
+.cg-dot.last { stroke-width: 10; }
+.cg-dot.pk { stroke-width: 12; }
+.cg-stem.hi, .cg-dot.hi { stroke: var(--dot-hi); }
+.cg-stem.pk, .cg-dot.pk { stroke: var(--warn-mark); }
+.cg-peak { position: absolute; transform: translate(-50%, calc(-100% - 9px)); font-size: 11.5px; font-weight: 600; color: var(--warn); white-space: nowrap; pointer-events: none; }
+.cg-avg-lab { position: absolute; right: 0; transform: translateY(calc(-100% - 2px)); font-size: 10.5px; color: var(--ink-2); white-space: nowrap; pointer-events: none; }
+.cg-tip { position: absolute; top: 10px; width: 170px; background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); font-size: 12px; pointer-events: none; z-index: 2; }
+.cg-tip[hidden] { display: none; }
+.cg-tip .d { color: var(--ink-2); }
+.cg-tip .v { font-size: 15px; font-weight: 620; }
+.cg-tip .n { color: var(--ink-3); }
+.cost-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(480px, 100%), 1fr)); gap: 14px; align-items: start; }
+.cost-grid .cs-card { padding: 14px 18px 8px; gap: 0; }
+.cost-grid h3 { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.ct { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.ct th, .ct td { border: 0; padding: 7px 0 7px 12px; text-align: right; vertical-align: top; font-size: 12.5px; }
+.ct thead th { padding-block: 4px; font-size: 11.5px; font-weight: 550; color: var(--ink-3); }
+.ct thead th.main { color: var(--ink); }
+.ct tbody tr { border-top: 1px solid var(--grid); }
+.ct th:first-child, .ct td:first-child { padding-left: 0; }
+.ct .l { text-align: left; }
+.ct td.l { overflow-wrap: anywhere; }
+.ct .mid { color: var(--ink-2); }
+.ct a { color: var(--accent); text-decoration: none; }
+.ct a:hover { text-decoration: underline; }
+.ct .s { font-size: 11.5px; color: var(--ink-3); }
+.ct td.sub { width: 84px; white-space: nowrap; }
+.ct td.barcol { width: 112px; white-space: nowrap; }
+.ct-foot { font-size: 12px; color: var(--ink-3); padding: 8px 0 4px; }
+.linkbtn { border: 0; background: none; padding: 0; color: var(--accent); cursor: pointer; font: inherit; }
+.linkbtn:hover { text-decoration: underline; }
+.tt-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) 70px 90px; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--grid); font-size: 12.5px; }
+.tt-row .s { font-size: 11.5px; color: var(--ink-3); }
+.tt-row .n { text-align: right; color: var(--ink-2); white-space: nowrap; }
+.tt-row .n.main { color: var(--ink); font-weight: 600; }
+.tt-bar { height: 8px; border-radius: 4px; background: var(--grid); overflow: hidden; }
+.tt-bar i { display: block; height: 8px; border-radius: 4px; background-image: linear-gradient(90deg, var(--accent), var(--heat-mid), var(--crit-mark)); background-repeat: no-repeat; }
+.tt-foot { font-size: 12px; color: var(--ink-3); padding: 8px 0 4px; }
+/* Overview By model: a row opens where that model's errors were */
+.ov-models .ov-head .ov-note { font-weight: 400; }
+.ov-t td .s, .ov-t th .s { font-size: 11.5px; color: var(--ink-3); font-weight: 400; }
+.ov-t td .fig { font-weight: 600; }
+.om-row { cursor: pointer; }
+.om-row:hover > * { background: var(--hover); }
+.om-open { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; color: var(--ink); }
+.om-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.om-open::after { content: "+"; color: var(--accent); font-size: 12px; margin-left: 2px; }
+.om-open[aria-expanded="true"]::after { content: "-"; }
+.om-sw { width: 8px; height: 8px; border-radius: 2px; }
+.om-row .s { padding-left: 15px; }
+.ov-t tr.om-detail > td { text-align: left; white-space: normal; padding: 2px 0 10px 15px; }
+.om-detail h4 { font-size: 12.5px; font-weight: 600; margin: 4px 0 2px; }
+/* the inner table: its headings are not the outer table's row names */
+.om-detail .ov-t thead th { width: auto; white-space: nowrap; }
+.om-detail .ov-t td.mid { width: 96px; }
+.om-call { padding: 8px 10px; border-left: 3px solid var(--warn-mark); background: var(--sunken); border-radius: 6px; font-size: 12.5px; }
+.om-call b { font-weight: 600; }
+.om-call span { color: var(--ink-2); }
 .md { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .md > p, .md li { max-width: 80ch; overflow-wrap: anywhere; }
 .md .md-h2 { font-size: 16px; font-weight: 600; margin-top: 10px; }
@@ -2818,7 +3206,7 @@ td a.sid { font-family: var(--mono); }
    running and the coach's tips, then By activity beside Projects and MCP servers. */
 .tabrow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
 .seg { display: none; gap: 2px; padding: 2px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
-.ov-live .seg { display: inline-flex; }
+.has-period .seg { display: inline-flex; }
 .seg button { border: 0; background: none; border-radius: 6px; padding: 5px 11px; min-width: 40px; font-size: 12.5px; font-weight: 550; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
 .seg button:hover { background: var(--hover); }
 .seg button[aria-pressed="true"] { background: var(--pill); color: var(--pill-text); }
@@ -2925,7 +3313,7 @@ td a.sid { font-family: var(--mono); }
 /* three tables; the first figure of each row sits over a thin heat bar */
 .ov-row3 { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 10px; align-items: start; }
 .ov-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.ov-acts, .ov-projects, .ov-mcp { padding-bottom: 6px; }
+.ov-acts, .ov-projects, .ov-mcp, .ov-models { padding-bottom: 6px; }
 .ov-t { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .ov-t th, .ov-t td { border: 0; border-top: 1px solid var(--grid); padding: 5px 0 5px 12px; text-align: right; vertical-align: top; white-space: nowrap; min-width: 0; font-size: 12.5px; }
 .ov-t thead th { border-top: 0; padding-block: 4px; font-size: 11.5px; font-weight: 550; color: var(--ink-3); }
@@ -2948,18 +3336,16 @@ td a.sid { font-family: var(--mono); }
   .tabs a { padding-block: 13px; }
   .btn { min-height: 44px; padding-inline: 14px; }
   .codebar .btn { min-height: 44px; }
-  th button.sort { min-height: 44px; line-height: 44px; min-width: 44px; }
-  td a.sid { display: inline-block; min-height: 44px; line-height: 44px; }
   .fold > summary, .evidence > summary, .evidence-slice > summary, .patterns summary { padding-block: 13px; }
 }
 @media (max-width: 720px) {
-  td.barcell, th.barcell, .opt { display: none; }
   th, td { padding: 6px 8px; }
   .headline { grid-template-columns: minmax(0, 1fr); }
   .items > li { grid-template-columns: 22px minmax(0, 1fr); padding: 12px; }
   .patterns details > ul { margin-left: 14px; }
   /* a table wider than a phone scrolls sideways inside its card */
-  .ov-acts, .ov-projects, .ov-mcp { overflow-x: auto; }
+  .ov-acts, .ov-projects, .ov-mcp, .ov-models, .cs-top { overflow-x: auto; }
+  .tt-row { grid-template-columns: minmax(0, 1.2fr) minmax(40px, 1fr) auto auto; gap: 10px; }
   .ov-t td.barcol { width: 84px; min-width: 84px; }
   .hb { width: 84px; }
   .hb i { background-size: 84px 4px; }
@@ -3012,8 +3398,6 @@ td a.sid { font-family: var(--mono); }
     </div>
   </section>
   <section class="view" id="view-cost" aria-labelledby="tab-cost">
-    <h2 class="view-title">Cost</h2>
-    <p class="lede">What your tokens would cost at API list prices. <strong>API-equivalent, not a bill:</strong> on a Claude subscription you are not charged this.</p>
     {{COST}}
     <div id="cost-root"></div>
   </section>
@@ -3042,7 +3426,7 @@ td a.sid { font-family: var(--mono); }
   "use strict";
   var D = JSON.parse(document.getElementById("coach-data").textContent);
   var VIEWS = ["overview", "today", "week", "cost", "trends", "progress", "setup", "baseline"];
-  var dayIdx = 0, weekIdx = 0, costIdx = 0;
+  var dayIdx = 0, weekIdx = 0, view = null;
   var LIVE = D.live || null, liveOk = !!(LIVE && !(LIVE.version > 1));
   var PERIODS = ["today", "week", "month", "all"], period = "today";
 
@@ -3342,130 +3726,181 @@ td a.sid { font-family: var(--mono); }
     if (Math.round(x * 100) / 100 >= 10) { return "$" + Math.round(x).toLocaleString("en-US"); }
     return "$" + x.toFixed(2);
   }
-  /* A table whose numeric columns sort on click. cols: {k, label, num, fmt, opt, bar}. */
-  function sortable(id, cols, rows, sortKey) {
-    var state = { k: sortKey, dir: -1 };
-    var wrap = h("div", { class: "panel-t scroll" });
-    function draw() {
-      wrap.textContent = "";
-      var max = 0;
-      rows.forEach(function (r) { if (typeof r.usd === "number" && r.usd > max) { max = r.usd; } });
-      var sorted = rows.slice().sort(function (a, b) {
-        var x = a[state.k], y = b[state.k];
-        if (x == null) { x = typeof y === "string" ? "" : -1; }
-        if (y == null) { y = typeof x === "string" ? "" : -1; }
-        if (typeof x === "string") { return state.dir * String(x).localeCompare(String(y)); }
-        return state.dir * (x - y);
+  /* Cost: the period the Overview's buttons pick. The split card's switch is remembered per person. */
+  var SPLITS = [["model", "Model"], ["project", "Project"], ["agent", "Main or subagent"]];
+  var TOP_SESSIONS = 8, allSessions = false;
+  var split = stored("coach.split");
+  if (!SPLITS.some(function (s) { return s[0] === split; })) { split = "model"; }
+  function shareText(r) { return r > 0 && r < 0.01 ? "Under 1%" : Math.round(r * 100) + "%"; }
+  function swatch(i) { return "sw" + (i < 4 ? i + 1 : 0); }
+  function splitCard(t) {
+    var card = h("section", { class: "cs-card cs-split", id: "cs-split" });
+    var seg = h("div", { class: "seg cs-seg", role: "group", "aria-label": "Split the spend by" });
+    SPLITS.forEach(function (s) {
+      var b = h("button", { type: "button", id: "cs-by-" + s[0], "aria-pressed": s[0] === split ? "true" : "false", text: s[1] });
+      b.addEventListener("click", function () {
+        split = s[0];
+        try { localStorage.setItem("coach.split", split); } catch (e) { /* storage is optional */ }
+        var old = document.getElementById("cs-split");
+        if (old && old.parentNode && old.parentNode.replaceChild) { old.parentNode.replaceChild(splitCard(t), old); }
+        refocus("cs-by-" + s[0]);
       });
-      var tr = h("tr");
-      cols.forEach(function (c) {
-        if (c.bar) { tr.appendChild(h("th", { class: "barcell", "aria-hidden": "true" })); return; }
-        var cls = (c.num ? "n" : "") + (c.opt ? " opt" : "");
-        var th = h("th", { class: cls || null, scope: "col",
-          "aria-sort": state.k === c.k ? (state.dir > 0 ? "ascending" : "descending") : null });
-        var b = h("button", { type: "button", class: "sort", id: id + "-sort-" + c.k, text: c.label });
-        b.addEventListener("click", function () {
-          if (state.k === c.k) { state.dir = -state.dir; } else { state.k = c.k; state.dir = c.num ? -1 : 1; }
-          draw(); refocus(id + "-sort-" + c.k);
-        });
-        th.appendChild(b);
-        tr.appendChild(th);
-      });
-      var table = h("table", null, h("thead", null, tr)), body = h("tbody");
-      sorted.forEach(function (r) {
-        var row = h("tr");
-        cols.forEach(function (c) {
-          if (c.bar) {
-            var w = max > 0 && r.usd ? Math.max(1, Math.round(100 * r.usd / max)) : 0;
-            row.appendChild(h("td", { class: "barcell", "aria-hidden": "true" },
-              w ? h("span", { class: "share", style: "width:" + w + "%" }) : null));
-            return;
-          }
-          var cls = (c.num ? "n" : "") + (c.opt ? " opt" : "");
-          var cell = h("td", { class: cls || null });
-          var v = c.fmt ? c.fmt(r[c.k], r) : r[c.k];
-          if (v && v.nodeType) { cell.appendChild(v); } else { cell.textContent = v == null ? "" : String(v); }
-          row.appendChild(cell);
-        });
-        body.appendChild(row);
-      });
-      table.appendChild(body);
-      wrap.appendChild(table);
+      seg.appendChild(b);
+    });
+    card.appendChild(h("div", { class: "cs-head" }, h("span", { class: "lab", text: "Split by" }), seg));
+    var parts = (t.split || {})[split] || [];
+    if (!parts.length) {
+      card.appendChild(h("p", { class: "muted", text: "No spend to split in this period." }));
+      return card;
     }
-    draw();
-    return wrap;
+    var bar = h("div", { class: "cs-bar", "aria-hidden": "true" }), key = h("div", { class: "cs-key" });
+    parts.forEach(function (p, i) {
+      bar.appendChild(h("i", { class: swatch(i), style: "flex:" + Math.max(p.share * 1000, 6).toFixed(1) + " 1 0" }));
+      key.appendChild(h("span", { title: p.folded ? plural(p.folded, split === "model" ? "smaller model" : "smaller project") + " together" : null },
+        h("i", { class: swatch(i) }), h("span", { class: "nm", text: p.name }), h("b", { text: usd(p.usd) }), h("span", { class: "pc", text: shareText(p.share) })));
+    });
+    card.appendChild(bar);
+    card.appendChild(key);
+    return card;
   }
-  function costBlock(title, table, note) {
-    return h("div", null, h("h3", { class: "sub", text: title }), table, note ? h("p", { class: "muted", text: note }) : null);
+  /* The cost graph: its readout follows the pointer, and the focused graph takes the arrow keys. */
+  function bindCostGraph(fig) {
+    var svg = fig.querySelector("svg[tabindex]"), tip = fig.querySelector(".cg-tip");
+    var gs = svg ? svg.querySelectorAll("g.b") : [], at = -1;
+    if (!svg || !tip || !gs.length) { return; }
+    function mark(i) {
+      if (at >= 0 && gs[at]) { gs[at].classList.remove("on"); }
+      at = i;
+      if (i < 0 || !gs[i]) { tip.hidden = true; return; }
+      var g = gs[i], x = parseFloat(g.getAttribute("data-x")) || 0;
+      g.classList.add("on");
+      tip.childNodes[0].textContent = g.getAttribute("data-r");
+      tip.childNodes[1].textContent = g.getAttribute("data-v");
+      tip.childNodes[2].textContent = g.getAttribute("data-n");
+      tip.style.left = x < 62 ? "calc(" + x + "% + 14px)" : "calc(" + x + "% - 184px)";
+      tip.hidden = false;
+    }
+    function over(ev) {
+      var g = ev.target.closest ? ev.target.closest("g.b") : null;
+      if (g) { mark(Array.prototype.indexOf.call(gs, g)); }
+    }
+    svg.addEventListener("pointermove", over);
+    svg.addEventListener("pointerdown", over);
+    svg.addEventListener("pointerleave", function () { if (document.activeElement !== svg) { mark(-1); } });
+    svg.addEventListener("focus", function () { if (at < 0) { mark(gs.length - 1); } });
+    svg.addEventListener("blur", function () { mark(-1); });
+    svg.addEventListener("keydown", function (ev) {
+      var step = ev.key === "ArrowLeft" ? -1 : ev.key === "ArrowRight" ? 1 : 0;
+      if (!step) { return; }
+      ev.preventDefault();
+      mark(Math.max(0, Math.min(gs.length - 1, (at < 0 ? gs.length - 1 : at) + step)));
+    });
+  }
+  function costGraph() {
+    var plot = graft("cg-" + period);
+    if (!plot) { return null; }
+    var sum = plot.querySelector ? plot.querySelector(".cg-sum") : null;
+    var unit = sum ? sum.getAttribute("data-unit") : period === "today" ? "hour" : "day";
+    var title = h("h3", { text: "Cost per " + (unit === "hour" || unit === "week" ? unit : "day") });
+    var head = h("div", { class: "cg-head" }, title);
+    if (sum) { head.appendChild(sum); }
+    var fig = h("figure", { class: "cs-card cg-card" }, head, plot);
+    bindCostGraph(fig);
+    return fig;
+  }
+  function openDay(day) {
+    D.dailies.forEach(function (x, i) { if (x.date === day) { dayIdx = i; } });
+    renderToday();
+  }
+  function topSessions(P) {
+    var card = h("section", { class: "cs-card cs-top" }, h("h3", { text: "Top sessions" }));
+    var rows = P.sessions || [];
+    if (!rows.length) {
+      card.appendChild(h("p", { class: "ct-foot", text: "Sessions are listed once the day's recap has run." }));
+      return card;
+    }
+    var max = 0;
+    rows.forEach(function (r) { if (isNum(r.usd) && r.usd > max) { max = r.usd; } });
+    var body = h("tbody");
+    (allSessions ? rows : rows.slice(0, TOP_SESSIONS)).forEach(function (r) {
+      var name = r.title || "Session " + r.id, link;
+      if (D.dailies.some(function (x) { return x.date === r.day; })) {
+        link = h("a", { href: "#today", text: name, title: "Open the recap of " + r.when });
+        link.addEventListener("click", function () { openDay(r.day); });
+      } else { link = h("span", { text: name }); }
+      var heat = isNum(r.usd) && max > 0 ? Math.max(2, Math.round(100 * r.usd / max)) : 0;
+      body.appendChild(h("tr", null,
+        h("td", { class: "l" }, link, h("div", { class: "s", text: r.when })),
+        h("td", { class: "l mid", text: r.project + (r.kind === "scheduled" ? ", scheduled" : "") }),
+        h("td", { class: "sub mid", text: isNum(r.sub_usd) ? money(r.sub_usd) : "" }),
+        h("td", { class: "barcol" }, h("div", { text: isNum(r.usd) ? money(r.usd) : "no price" }),
+          h("div", { class: "hb", "aria-hidden": "true" }, heat ? h("i", { style: "width:" + heat + "%" }) : null))));
+    });
+    card.appendChild(h("table", { class: "ct" }, h("thead", null, h("tr", null,
+      h("th", { class: "l", scope: "col", text: "Session", title: "The session's title; it opens that day's recap." }),
+      h("th", { class: "l", scope: "col", text: "Project", title: "The project the session ran in." }),
+      h("th", { scope: "col", text: "Subagents", title: "What the session's subagents cost, part of its cost." }),
+      h("th", { class: "main", scope: "col", text: "Cost", title: TIPS.cost }))), body));
+    var foot = h("p", { class: "ct-foot" }, "Click a session to open its day's recap. ");
+    var n = P.session_count || rows.length;
+    if (rows.length > TOP_SESSIONS) {
+      var more = h("button", { type: "button", class: "linkbtn", id: "cs-all",
+        text: allSessions ? "Top " + TOP_SESSIONS + " only" : n > rows.length ? "Top " + rows.length + " of " + whole(n) + " sessions" : "All " + whole(n) + " sessions" });
+      more.addEventListener("click", function () { allSessions = !allSessions; renderCost(); refocus("cs-all"); });
+      foot.appendChild(more);
+    }
+    card.appendChild(foot);
+    return card;
+  }
+  function tokenTypes(t) {
+    var card = h("section", { class: "cs-card cs-types" }, h("h3", { text: "By token type" }));
+    var types = (t.by_type || []).slice().sort(function (a, b) { return b.usd - a.usd; }), max = 0;
+    types.forEach(function (r) { if (r.usd > max) { max = r.usd; } });
+    types.forEach(function (r) {
+      var w = max > 0 && r.usd > 0 ? Math.max(1, Math.round(100 * r.usd / max)) : 0;
+      card.appendChild(h("div", { class: "tt-row" },
+        h("div", null, r.type, r.price ? h("div", { class: "s", text: r.price }) : null),
+        h("div", { class: "tt-bar", "aria-hidden": "true" },
+          w ? h("i", { style: "width:" + w + "%;background-size:" + (10000 / w).toFixed(1) + "% 100%" }) : null),
+        h("div", { class: "n", text: tok(r.tokens) }),
+        h("div", { class: "n main", text: money(r.usd) })));
+    });
+    var foot = [];
+    if (t.type_note) { foot.push(t.type_note); }
+    if (D.cost.pricesDate) { foot.push("List prices as of " + monDay(D.cost.pricesDate + "T00:00") + "."); }
+    if (D.cost.oneAccount) { foot.push("Showing one account only."); }
+    if (foot.length) { card.appendChild(h("p", { class: "tt-foot", text: foot.join(" ") })); }
+    return card;
   }
   function renderCost() {
     var root = document.getElementById("cost-root"), C = D.cost;
     if (!C) { return; }
     root.textContent = "";
-    var p = C.periods[costIdx], t = p.t;
-    var chips = h("div", { class: "chips", role: "group", "aria-label": "Period" }, h("span", { class: "lab", text: "Period" }));
-    C.periods.forEach(function (x, i) {
-      chips.appendChild(button("cost-" + x.key, x.label, function () { costIdx = i; renderCost(); },
-        { pressed: i === costIdx, label: "Show " + x.label + ", " + x.title }));
-    });
-    root.appendChild(chips);
+    var P = (C.periods || {})[period], t = P && P.t;
+    if (!t || !t.days) {
+      if (period === "today" && P && P.live_hours) {
+        root.appendChild(h("p", { class: "muted", text: "Today's totals and split are recorded at the next recap. Spend so far, by the hour:" }));
+        var lg = costGraph();
+        if (lg) { root.appendChild(lg); }
+        return;
+      }
+      root.appendChild(emptyBox("No cost data for this period.", "Pick another period."));
+      return;
+    }
     var st = h("div", { class: "stats" });
     [[usd(t.usd), "API-equivalent, not a bill"], [tok(t.tokens), "tokens"], [tok(t.out), "output tokens"],
      [String(t.days), t.days === 1 ? "day with data" : "days with data"]].forEach(function (x) {
       st.appendChild(h("span", null, h("b", { text: x[0] }), x[1]));
     });
-    root.appendChild(h("h3", { class: "sub", text: p.label + ": " + p.title }));
-    root.appendChild(st);
+    var top = h("div", { class: "cs-top-block" }, st);
     if (t.unpriced_tokens) {
-      root.appendChild(h("p", { class: "muted", text: tok(t.unpriced_tokens) + " tokens are unpriced: their model is not in the price table, so they are counted but not costed." }));
+      top.appendChild(h("p", { class: "muted", text: tok(t.unpriced_tokens) + " tokens are unpriced: their model is not in the price table, so they are counted but not costed." }));
     }
-    if (t.usd > 0) {
-      var a = Math.max(1, Math.round(100 * t.main_usd / t.usd));
-      root.appendChild(h("div", null,
-        h("div", { class: "split", role: "img", "aria-label": "Main sessions " + usd(t.main_usd) + ", subagents " + usd(t.sub_usd) },
-          h("span", { style: "width:" + a + "%" }), h("span", { class: "s2", style: "width:" + (100 - a) + "%" })),
-        h("div", { class: "split-key" },
-          h("span", null, h("i"), "Main sessions ", h("b", { text: usd(t.main_usd) })),
-          h("span", null, h("i", { class: "s2" }), "Subagents ", h("b", { text: usd(t.sub_usd) })))));
-    }
-    root.appendChild(costBlock("By project", sortable("cp", [
-      { k: "name", label: "Project", fmt: function (v, r) {
-          var s = h("span", null, v);
-          if (r.scheduled) { s.appendChild(document.createTextNode(" ")); s.appendChild(h("span", { class: "pill", text: r.scheduled === r.sessions ? "scheduled" : r.scheduled + " scheduled" })); }
-          return s; } },
-      { k: "sessions", label: "Sessions", num: true, opt: true },
-      { k: "tokens", label: "Tokens", num: true, fmt: tok },
-      { k: "main_usd", label: "Main", num: true, opt: true, fmt: usd },
-      { k: "sub_usd", label: "Subagents", num: true, opt: true, fmt: usd },
-      { k: "usd", label: "Cost", num: true, fmt: usd },
-      { bar: true }], t.by_project, "usd"),
-      t.days > 1 ? "A session that runs over two days counts once on each day." : null));
-    var grid = h("div", { class: "cost-grid" });
-    grid.appendChild(costBlock("By model", sortable("cm", [
-      { k: "name", label: "Model" }, { k: "tokens", label: "Tokens", num: true, fmt: tok },
-      { k: "usd", label: "Cost", num: true, fmt: function (v, r) { return r.priced ? usd(v) : "unpriced"; } },
-      { bar: true }], t.by_model, "usd")));
-    grid.appendChild(costBlock("By token type", sortable("ct", [
-      { k: "type", label: "Type" }, { k: "tokens", label: "Tokens", num: true, fmt: tok },
-      { k: "usd", label: "Cost", num: true, fmt: usd }, { bar: true }], t.by_type, "usd")));
-    root.appendChild(grid);
-    if (p.key === "day" && C.sessions && C.sessions.length) {
-      root.appendChild(costBlock("By session, top " + C.sessions.length, sortable("cs", [
-        { k: "id", label: "Session", fmt: function (v) {
-            var link = h("a", { class: "sid", href: "#today", text: v, title: "Show this day's recap" });
-            link.addEventListener("click", function () { D.dailies.forEach(function (x, i) { if (x.date === C.day) { dayIdx = i; } }); renderToday(); });
-            return link; } },
-        { k: "project", label: "Project", fmt: function (v, r) {
-            var s = h("span", null, v);
-            if (r.kind === "scheduled") { s.appendChild(document.createTextNode(" ")); s.appendChild(h("span", { class: "pill", text: "scheduled" })); }
-            return s; } },
-        { k: "tokens", label: "Tokens", num: true, opt: true, fmt: function (v) { return v == null ? "" : tok(v); } },
-        { k: "sub_usd", label: "Subagents", num: true, opt: true, fmt: function (v) { return v == null ? "" : usd(v); } },
-        { k: "usd", label: "Cost", num: true, fmt: usd }, { bar: true }], C.sessions, "usd"),
-        "The session id opens that day's recap."));
-    }
-    root.appendChild(h("p", { class: "muted", text: "List prices as of " + C.pricesDate + ". All time means since " + C.since + ", the first day on record." }));
-    if (C.oneAccount) root.appendChild(h("p", { class: "muted", text: "Showing one account only." }));
+    top.appendChild(splitCard(t));
+    root.appendChild(top);
+    var g = costGraph();
+    if (g) { root.appendChild(g); }
+    root.appendChild(h("div", { class: "cost-grid" }, topSessions(P), tokenTypes(t)));
   }
 
   /* A graph's readout follows the pointer; a line graph also takes focus and the arrow keys. */
@@ -3729,14 +4164,99 @@ td a.sid { font-family: var(--mono); }
     return c;
   }
   function num(v, fmt) { return isNum(v) ? fmt(v) : ""; }
+  /* By model: a row a model; a row opens (click or Enter) the table of where its errors were. */
+  var MTIPS = {
+    model: "The model that made the calls; open a row to see where its errors were.",
+    cost: "What this model's tokens would cost at API list prices.",
+    ft: "Edits that landed without the same file being edited again after a command.",
+    err: "Tool calls this model made that failed, and their share of its tool calls.",
+    rw: "Edits this model had to redo, plus times you corrected its answer.",
+    where: "The tool or kind of work the errors and rework came from.",
+    werr: "Calls of this tool by this model that failed.",
+    wredo: "Edits this model redid after using this tool.",
+    wcorr: "Times you corrected this model after it used this tool."
+  };
+  var openModels = {};
+  function whereTable(m) {
+    var rows = m.where || [];
+    if (!rows.length) { return h("p", { class: "muted", text: "No errors or rework recorded for this model." }); }
+    var body = h("tbody");
+    rows.forEach(function (w) {
+      body.appendChild(h("tr", null,
+        h("th", { scope: "row", text: w.name + (w.kind === "mcp" ? ", MCP" : "") }),
+        h("td", { class: "barcol" }, h("div", { text: num(w.errors, whole) }),
+          h("div", { class: "hb", "aria-hidden": "true" }, w.heat ? h("i", { style: "width:" + w.heat + "%" }) : null)),
+        h("td", { class: "mid", text: num(w.redone_edits, whole) }),
+        h("td", { class: "mid", text: num(w.corrections, whole) })));
+    });
+    return h("table", { class: "ov-t" }, h("thead", null, h("tr", null,
+      h("th", { scope: "col", text: "Tool or activity", title: MTIPS.where }),
+      h("th", { scope: "col", class: "main", text: "Errors", title: MTIPS.werr }),
+      h("th", { scope: "col", text: "Redone edits", title: MTIPS.wredo }),
+      h("th", { scope: "col", text: "Corrections", title: MTIPS.wcorr }))), body);
+  }
+  function ovModels(p) {
+    var ms = p.models;
+    if (!ms || !ms.length) { return null; }
+    var c = h("section", { class: "ov-card ov-models" }, h("div", { class: "ov-head" },
+      h("h3", { class: "sub", text: "By model" }),
+      h("span", { class: "ov-note", text: "Errors and rework are counted on the model that made the call" })));
+    var body = h("tbody");
+    ms.forEach(function (m, i) {
+      var id = "om-" + i, open = !!openModels[m.name];
+      var btn = h("button", { type: "button", class: "om-open", id: id, "aria-expanded": open ? "true" : "false" },
+        h("span", { class: "om-sw " + swatch(i), "aria-hidden": "true" }), m.name);
+      var ft = isNum(m.first_try) && m.edit_turns !== 0;
+      var rate = isNum(m.error_rate) ? (m.error_rate * 100).toFixed(1) + "% of tool calls"
+        : m.tool_calls > 0 ? "" : "no tool calls";
+      var redo = m.redone_edits, corr = m.corrections, none = (redo || 0) === 0 && (corr || 0) === 0 && (isNum(redo) || isNum(corr));
+      var row = h("tr", { class: "om-row" },
+        h("th", { scope: "row" }, btn, m.where_most ? h("div", { class: "s", text: "Mostly " + m.where_most }) : null),
+        h("td", { class: "barcol" }, h("div", { text: num(m.usd, money) }),
+          h("div", { class: "hb", "aria-hidden": "true" }, m.heat ? h("i", { style: "width:" + m.heat + "%" }) : null),
+          isNum(m.share) ? h("div", { class: "s", text: shareText(m.share) + " of spend" }) : null),
+        h("td", { class: ft ? "mid" : "dim", text: ft ? pct(m.first_try) : "No edits" }),
+        h("td", null, h("div", { class: "fig" + (m.error_level ? " is-" + m.error_level : ""), text: num(m.tool_errors, whole) }),
+          rate ? h("div", { class: "s", text: rate }) : null),
+        h("td", null, none ? h("div", { class: "fig is-good", text: "None" }) :
+          h("div", { class: "fig" + (m.rework_level ? " is-" + m.rework_level : ""), text: isNum(redo) ? plural(Math.round(redo), "edit") : "" }),
+          !none && isNum(corr) ? h("div", { class: "s", text: "and " + plural(Math.round(corr), "correction") }) : null));
+      var detail = h("tr", { class: "om-detail" }, h("td", { colspan: "5" },
+        h("h4", { text: "Where the errors were" }), whereTable(m)));
+      detail.hidden = !open;
+      function toggle() {
+        open = !open;
+        openModels[m.name] = open;
+        detail.hidden = !open;
+        btn.setAttribute("aria-expanded", open ? "true" : "false");
+      }
+      btn.addEventListener("click", function (ev) { ev.stopPropagation(); toggle(); });
+      row.addEventListener("click", toggle);
+      body.appendChild(row);
+      body.appendChild(detail);
+    });
+    c.appendChild(h("table", { class: "ov-t" }, h("thead", null, h("tr", null,
+      h("th", { scope: "col", text: "Model", title: MTIPS.model }),
+      h("th", { scope: "col", class: "main", text: "Cost", title: MTIPS.cost }),
+      h("th", { scope: "col", text: "First try", title: MTIPS.ft }),
+      h("th", { scope: "col", text: "Tool errors", title: MTIPS.err }),
+      h("th", { scope: "col", text: "Rework", title: MTIPS.rw }))), body));
+    var more = p.models_more;
+    if (more && more.count) {
+      c.appendChild(h("p", { class: "ov-note om-more", text: plural(more.count, "smaller model") + ", " + money(more.usd) }));
+    }
+    var note = p.model_note;
+    if (note) { c.appendChild(h("p", { class: "om-call" }, h("b", { text: note.lead }), note.rest ? h("span", { text: " " + note.rest }) : null)); }
+    return c;
+  }
   function ovTables(p) {
     return h("div", { class: "ov-row3" },
-      withNote(ovTable("ov-acts", "By activity", null, "Activity",
+      h("div", { class: "ov-col" }, withNote(ovTable("ov-acts", "By activity", null, "Activity",
         [["Cost", TIPS.cost], ["Turns", TIPS.turns], ["First try", TIPS.first], ["Share", TIPS.share]], p.activities,
         function (r) {
           return [[num(r.usd, money), "main"], [num(r.turns, whole), "mid"],
             [isNum(r.first_try) ? pct(r.first_try) : "No edits", isNum(r.first_try) ? "mid" : "dim"], [num(r.share, pct), "dim"]];
-        }, "No activity in this period"), p),
+        }, "No activity in this period"), p), ovModels(p)),
       h("div", { class: "ov-col" },
         ovTable("ov-projects", "Projects", null, "Project",
           [["Cost", TIPS.cost], ["Sessions", TIPS.sessions], ["Share", TIPS.share]], p.projects,
@@ -3775,6 +4295,7 @@ td a.sid { font-family: var(--mono); }
   }
   function setPeriod(p, keep) {
     if (PERIODS.indexOf(p) < 0) { return; }
+    if (p !== period) { allSessions = false; }
     period = p;
     PERIODS.forEach(function (n) {
       document.getElementById("ov-p-" + n).setAttribute("aria-pressed", n === p ? "true" : "false");
@@ -3786,9 +4307,16 @@ td a.sid { font-family: var(--mono); }
       root.textContent = "";
       root.appendChild(emptyBox("Update the coach", "These numbers could not be drawn by this page."));
     }
+    try { renderCost(); } catch (err2) {
+      var croot = document.getElementById("cost-root");
+      croot.textContent = "";
+      croot.appendChild(emptyBox("Update the coach", "These costs could not be drawn by this page."));
+    }
     try { localStorage.setItem("coach.period", p); } catch (e) { /* storage is optional */ }
     if (keep) {
-      try { history.replaceState(null, "", "#overview/" + p); } catch (e2) { /* the address is optional */ }
+      /* the address keeps the view and its period: #overview/week, #cost/all */
+      var at = view === "cost" ? "cost" : "overview";
+      try { history.replaceState(null, "", "#" + at + "/" + p); } catch (e2) { /* the address is optional */ }
     }
   }
   PERIODS.forEach(function (n) {
@@ -3797,15 +4325,17 @@ td a.sid { font-family: var(--mono); }
 
   function stored(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
   function show(v) {
+    view = v;
     VIEWS.forEach(function (n) {
       document.getElementById("view-" + n).hidden = n !== v;
       var t = document.getElementById("tab-" + n);
       if (n === v) { t.setAttribute("aria-current", "page"); } else { t.removeAttribute("aria-current"); }
     });
-    document.documentElement.classList.toggle("ov-live", v === "overview" && liveOk);
+    /* the period buttons stand beside the tabs on the two views they drive */
+    document.documentElement.classList.toggle("has-period", (v === "overview" && liveOk) || (v === "cost" && !!D.cost));
     try { localStorage.setItem("coach.view", v); } catch (e) { /* storage is optional */ }
   }
-  /* The address wins (#cost, #overview/week, #overview/all), then the view and period last open. With
+  /* The address wins (#cost, #cost/all, #overview/week, #overview/all), then the view and period last open. With
      nothing to go on the page opens on the Overview, or on Today when there is no live feed. */
   function route() {
     var hash = (location.hash || "").slice(1).split("/"), v = hash[0];
@@ -3814,9 +4344,10 @@ td a.sid { font-family: var(--mono); }
       if (v === "overview" && !liveOk) { v = null; }
     }
     if (VIEWS.indexOf(v) < 0) { v = liveOk ? "overview" : "today"; }
-    var p = hash[0] === "overview" && PERIODS.indexOf(hash[1]) >= 0 ? hash[1] : stored("coach.period");
-    setPeriod(PERIODS.indexOf(p) < 0 ? period : p);
+    var p = (v === "overview" || v === "cost") && hash[0] === v && PERIODS.indexOf(hash[1]) >= 0
+      ? hash[1] : stored("coach.period");
     show(v);
+    setPeriod(PERIODS.indexOf(p) < 0 ? period : p);
   }
   VIEWS.forEach(function (n) {
     document.getElementById("tab-" + n).addEventListener("click", function () { show(n); });
@@ -3826,7 +4357,6 @@ td a.sid { font-family: var(--mono); }
 
   renderToday();
   renderWeek();
-  renderCost();
   liveLine();
   /* a page left open stops saying "Live" once its numbers are over 15 minutes old */
   if (typeof setInterval === "function") { setInterval(liveLine, 30000); }

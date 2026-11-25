@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "updated": null,
+  "page_url": null,
+  "periods": {
+    "today": {
+      "label": null,
+      "cost_usd": 4.5,
+      "prev_cost_usd": null,
+      "calls": null,
+      "sessions": null,
+      "tokens": null,
+      "series_unit": null,
+      "series": [
+        {"t": null, "tokens": null, "usd": null},
+        "not a point",
+        {"t": "2026-11-23T01:00:00+02:00", "tokens": 1200, "usd": 0.01}
+      ],
+      "peak": null,
+      "first_try": {"rate": null, "prev_rate": null, "edit_turns": 0},
+      "cache_hit": null,
+      "corrections": {"count": "three", "prev_count": null},
+      "activities": [
+        {"name": "Conversation", "usd": 4.5, "share": 1, "first_try": null, "turns": null},
+        null
+      ],
+      "projects": null
+    },
+    "week": null,
+    "month": "soon"
+  },
+  "limits": {"as_of": null, "rows": []},
+  "running": null,
+  "tips": [{"title": null, "advice": null, "pattern": null}]
+}
