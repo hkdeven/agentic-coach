@@ -1,5 +1,10 @@
 __pycache__/
 *.pyc
 .DS_Store
+# Menu bar app build output
+menubar/build/
+menubar/.build/
+menubar/.swiftpm/
+*.app
 # Reports and digests quote your own sessions. They live in ~/.claude/coach/reports, never here.
 reports/

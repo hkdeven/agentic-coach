@@ -1,5 +1,5 @@
 // Runs the coach page's own script under a very small stand-in for the browser's document and
-// prints, as JSON, the text of the Overview it builds for each period. No browser and no window:
+// prints, as JSON, the text of the Overview and the Cost tab it builds for each period. No browser and no window:
 // tests/test_site.py uses it (when node is installed) to catch a script error that reading the
 // page's source cannot.
 // Usage: node page_dom.js <page.html> <now as an ISO time>
@@ -90,6 +90,7 @@ for (const s of scripts) vm.runInContext(s, sandbox, { filename: "page-script.js
 const out = { live: byId["ov-conn"] ? byId["ov-conn"].className + " | " + byId["ov-conn"].textContent : "", periods: {} };
 for (const p of ["today", "week", "month", "all"]) {
   byId["ov-p-" + p].listeners.click[0]();
-  out.periods[p] = { cls: byId["overview-root"].className, pressed: byId["ov-p-" + p].getAttribute("aria-pressed"), tree: byId["overview-root"].dump() };
+  out.periods[p] = { cls: byId["overview-root"].className, pressed: byId["ov-p-" + p].getAttribute("aria-pressed"), tree: byId["overview-root"].dump(),
+    cost: byId["cost-root"] ? byId["cost-root"].dump() : "" };
 }
 console.log(JSON.stringify(out));

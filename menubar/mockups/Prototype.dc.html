@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Coach prototype on a Mac screen</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+body{margin:0}
+a{color:#6ebbd7}a:hover{color:#9fd3e6}
+button{font:inherit;cursor:pointer}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; position: relative; overflow: hidden; background: #0c1115; color: #e3e9ee; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; line-height: 1.4">
+
+  <div style="position: absolute; left: 0; top: 0; width: 1440px; height: 28px; box-sizing: border-box; background: #19212a; border-bottom: 1px solid #2c3843; display: flex; align-items: center; justify-content: flex-end; gap: 14px; padding: 0 12px">
+    <button type="button" onClick="{{togglePanel}}" aria-expanded="{{panelOpen}}" aria-label="Agentic Coach, today's spend" style="display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border: 0; border-radius: 5px; background: {{itemBg}}; color: #e3e9ee">
+      <svg aria-hidden="true" width="16" height="14" viewBox="0 0 16 14" fill="none" stroke="#f08b81" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="1,11 5,7 8,9 15,2"></polyline></svg>
+      <span style="width: 6px; height: 6px; border-radius: 999px; background: #6cc693"></span>
+      <span style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; font-weight: 500">$27.80</span>
+      <span style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; font-weight: 500; color: #f08b81">Weekly 94%</span>
+    </button>
+    <span style="font-size: 12px; color: #b0bbc5">Mon Nov 23 11:41</span>
+  </div>
+
+  <sc-if value="{{idle}}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; left: 0; top: 400px; width: 1440px; text-align: center; color: #8a97a4; font-size: 15px">Click $27.80 in the menu bar, top right.</div>
+  </sc-if>
+
+  <sc-if value="{{pageOpen}}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; left: 24px; top: 46px; width: 952px; height: 838px; box-sizing: border-box; background: #11161b; border: 1px solid #2c3843; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 16px 48px rgba(0,0,0,0.5)">
+      <div style="height: 36px; flex: none; background: #19212a; border-bottom: 1px solid #2c3843; display: flex; align-items: center; justify-content: space-between; padding: 0 8px 0 14px">
+        <span style="font-size: 12px; color: #b0bbc5">Coach page, in the browser</span>
+        <button type="button" onClick="{{closePage}}" aria-label="Close the coach page" style="width: 26px; height: 26px; border: 0; border-radius: 6px; background: transparent; color: #b0bbc5; display: flex; align-items: center; justify-content: center">
+          <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="2" y1="2" x2="10" y2="10"></line><line x1="10" y1="2" x2="2" y2="10"></line></svg>
+        </button>
+      </div>
+      <div style="flex: 1; overflow-y: auto; font-size: 14px">
+
+        <div style="background: #19212a; border-bottom: 1px solid #2c3843; padding: 10px 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px">
+          <div style="font-size: 16px; font-weight: 600">Agentic Coach</div>
+          <div style="display: flex; flex-wrap: wrap; gap: 2px; flex: 1 1 380px; font-size: 13px">
+            <span style="padding: 5px 10px; border-radius: 6px; background: #1b3440; font-weight: 500">Overview</span>
+            <span style="padding: 5px 10px; color: #b0bbc5">Today</span>
+            <span style="padding: 5px 10px; color: #b0bbc5">This week</span>
+            <span style="padding: 5px 10px; color: #b0bbc5">Cost</span>
+            <span style="padding: 5px 10px; color: #b0bbc5">Trends</span>
+            <span style="padding: 5px 10px; color: #b0bbc5">Progress</span>
+            <span style="padding: 5px 10px; color: #b0bbc5">Setup</span>
+            <span style="padding: 5px 10px; color: #b0bbc5">Baseline</span>
+          </div>
+          <div style="display: flex; background: #0c1115; border-radius: 8px; padding: 3px; gap: 3px" role="group" aria-label="Period">
+            <sc-for list="{{periods}}" as="p" hint-placeholder-count="3">
+              <button type="button" onClick="{{p.pick}}" aria-pressed="{{p.on}}" style="height: 28px; padding: 0 14px; border: 0; border-radius: 6px; font-size: 13px; font-weight: 500; background: {{p.bg}}; color: {{p.fg}}">{{p.label}}</button>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="padding: 20px; display: flex; flex-direction: column; gap: 16px">
+
+          <div style="display: flex; flex-wrap: wrap; gap: 16px">
+            <div style="flex: 1 1 260px; min-width: 0; background: #19212a; border: 1px solid #2c3843; border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 4px">
+              <div style="font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">{{heroLabel}}</div>
+              <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 40px; font-weight: 500; line-height: 1.1">{{cost}}</div>
+              <div style="font-size: 12px; color: #8a97a4">API-equivalent, not a bill</div>
+              <div style="display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; color: #b0bbc5">
+                <span>{{calls}} calls</span><span>{{sessions}} sessions</span><span>{{tokens}} tokens</span>
+              </div>
+              <div style="font-size: 13px; color: #6cc693; margin-top: 2px">{{change}}</div>
+            </div>
+            <div style="flex: 2 1 420px; min-width: 0; background: #19212a; border: 1px solid #2c3843; border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 12px">
+              <div style="font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">Limits used</div>
+              <div style="display: flex; flex-wrap: wrap; gap: 14px 16px">
+                <div style="flex: 1 1 160px">
+                  <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 30px; font-weight: 500">7%</div>
+                  <div style="color: #b0bbc5">5-hour</div>
+                  <div style="font-size: 12px; color: #8a97a4">Resets in 2h 43m</div>
+                  <div style="font-size: 13px; color: #6cc693">39% in reserve</div>
+                </div>
+                <div style="flex: 1 1 160px">
+                  <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 30px; font-weight: 500; color: #f08b81">94%</div>
+                  <div style="color: #b0bbc5">Weekly, near limit</div>
+                  <div style="font-size: 12px; color: #8a97a4">Resets Nov 26 at 05:41</div>
+                  <div style="font-size: 13px; color: #f08b81">33% over pace, runs out in about 6h</div>
+                </div>
+                <div style="flex: 1 1 160px">
+                  <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 30px; font-weight: 500; color: #e2aa56">71%</div>
+                  <div style="color: #b0bbc5">Weekly, Fable</div>
+                  <div style="font-size: 12px; color: #8a97a4">Resets Nov 26 at 05:41</div>
+                  <div style="font-size: 13px; color: #e2aa56">10% over pace</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style="background: #19212a; border: 1px solid #2c3843; border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 8px">
+            <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 16px">
+              <div style="font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">{{spendTitle}}</div>
+              <div style="display: flex; flex-wrap: wrap; gap: 4px 16px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #b0bbc5">
+                <span>{{avg}}</span><span>{{peakUsd}}</span><span>Yesterday $145.30</span>
+              </div>
+            </div>
+            <svg role="img" aria-label="Line graph of spend over the chosen period" viewBox="0 0 1000 210" style="display: block; width: 100%; height: auto">
+              <line x1="0" y1="16" x2="1000" y2="16" stroke="#2c3843" stroke-width="1" stroke-dasharray="2 5"></line>
+              <line x1="0" y1="108" x2="1000" y2="108" stroke="#2c3843" stroke-width="1" stroke-dasharray="2 5"></line>
+              <line x1="0" y1="200" x2="1000" y2="200" stroke="#2c3843" stroke-width="1"></line>
+              <polygon points="{{big.area}}" fill="#6ebbd7" fill-opacity="0.12"></polygon>
+              <polyline points="{{big.line}}" fill="none" stroke="#6ebbd7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+              <circle cx="{{big.peakX}}" cy="{{big.peakY}}" r="4" fill="#19212a" stroke="#e2aa56" stroke-width="2"></circle>
+              <circle cx="{{big.lastX}}" cy="{{big.lastY}}" r="4" fill="#19212a" stroke="#6ebbd7" stroke-width="2"></circle>
+            </svg>
+            <div style="display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #8a97a4">
+              <span>{{x0}}</span><span>{{x1}}</span><span>{{x2}}</span>
+            </div>
+          </div>
+
+          <div style="display: flex; flex-wrap: wrap; gap: 16px">
+            <div style="flex: 1 1 380px; min-width: 0; background: #19212a; border: 1px solid #2c3843; border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 10px">
+              <div style="font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">Coach tips</div>
+              <div style="display: flex; gap: 10px; align-items: baseline">
+                <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; color: #6ebbd7">1</div>
+                <div><div style="font-weight: 500">agentic-coach, main has passed 600k of context.</div><div style="color: #b0bbc5">Compact or hand off before the next big step.</div></div>
+              </div>
+              <div style="display: flex; gap: 10px; align-items: baseline; border-top: 1px solid #2c3843; padding-top: 10px">
+                <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; color: #6ebbd7">2</div>
+                <div><div style="font-weight: 500">The same failing command ran 4 times in Atlas on Nov 22.</div><div style="color: #b0bbc5">After two failures, stop and read the error.</div></div>
+              </div>
+              <div style="display: flex; gap: 10px; align-items: baseline; border-top: 1px solid #2c3843; padding-top: 10px">
+                <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; color: #6ebbd7">3</div>
+                <div><div style="font-weight: 500">The weekly limit is 33% over pace.</div><div style="color: #b0bbc5">Move long runs to after the reset on Nov 26.</div></div>
+              </div>
+            </div>
+            <div style="flex: 1 1 380px; min-width: 0; background: #19212a; border: 1px solid #2c3843; border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 12px">
+              <div style="font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">How it went</div>
+              <sc-for list="{{went}}" as="w" hint-placeholder-count="3">
+                <div style="display: flex; align-items: center; gap: 14px">
+                  <div style="width: 130px">
+                    <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 24px; font-weight: 500">{{w.value}}</div>
+                    <div style="color: #b0bbc5">{{w.name}}</div>
+                  </div>
+                  <svg aria-hidden="true" viewBox="0 0 200 40" style="flex: 1; min-width: 0; height: 40px"><polyline points="{{w.spark}}" fill="none" stroke="{{w.color}}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline></svg>
+                  <div style="font-size: 12px; width: 110px; text-align: right; color: {{w.color}}">{{w.note}}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+            <div style="flex: 1 1 460px; min-width: 0; background: #19212a; border: 1px solid #2c3843; border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 9px">
+              <div style="font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">By activity</div>
+              <div style="display: flex; gap: 10px; font-size: 12px; color: #8a97a4">
+                <div style="width: 96px; flex: none"></div><div style="flex: 1"></div><div style="width: 84px; text-align: right">Cost</div><div style="width: 50px; text-align: right">Turns</div><div style="width: 60px; text-align: right">First try</div><div style="width: 40px; text-align: right">Share</div>
+              </div>
+              <sc-for list="{{acts}}" as="a" hint-placeholder-count="9">
+                <div style="display: flex; gap: 10px; align-items: center">
+                  <div aria-hidden="true" style="width: 96px; height: 8px; border-radius: 2px; background: #0c1115; overflow: hidden; flex: none"><div style="width: {{a.w}}; height: 8px; overflow: hidden"><div style="width: 96px; height: 8px; background: linear-gradient(90deg, #6ebbd7, #e2aa56, #f08b81)"></div></div></div>
+                  <div style="flex: 1; min-width: 0">{{a.name}}</div>
+                  <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; width: 84px; text-align: right">{{a.usd}}</div>
+                  <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; color: #b0bbc5; width: 50px; text-align: right">{{a.turns}}</div>
+                  <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; width: 60px; text-align: right; color: {{a.ftColor}}">{{a.ft}}</div>
+                  <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; color: #8a97a4; width: 40px; text-align: right">{{a.share}}</div>
+                </div>
+              </sc-for>
+            </div>
+
+            <div style="flex: 1 1 360px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+              <div style="background: #19212a; border: 1px solid #2c3843; border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 9px">
+                <div style="font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">Projects</div>
+                <div style="display: flex; gap: 10px; font-size: 12px; color: #8a97a4">
+                  <div style="width: 96px; flex: none"></div><div style="flex: 1"></div><div style="width: 84px; text-align: right">Cost</div><div style="width: 58px; text-align: right">Sessions</div><div style="width: 40px; text-align: right">Share</div>
+                </div>
+                <sc-for list="{{projects}}" as="r" hint-placeholder-count="3">
+                  <div style="display: flex; gap: 10px; align-items: center">
+                    <div aria-hidden="true" style="width: 96px; height: 8px; border-radius: 2px; background: #0c1115; overflow: hidden; flex: none"><div style="width: {{r.w}}; height: 8px; overflow: hidden"><div style="width: 96px; height: 8px; background: linear-gradient(90deg, #6ebbd7, #e2aa56, #f08b81)"></div></div></div>
+                    <div style="flex: 1; min-width: 0">{{r.name}}</div>
+                    <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; width: 84px; text-align: right">{{r.usd}}</div>
+                    <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; color: #b0bbc5; width: 58px; text-align: right">{{r.sessions}}</div>
+                    <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; color: #8a97a4; width: 40px; text-align: right">{{r.share}}</div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="background: #19212a; border: 1px solid #2c3843; border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 9px">
+                <div style="font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">MCP servers</div>
+                <div style="display: flex; gap: 10px; font-size: 12px; color: #8a97a4">
+                  <div style="width: 96px; flex: none"></div><div style="flex: 1"></div><div style="width: 50px; text-align: right">Calls</div><div style="width: 44px; text-align: right">Tools</div><div style="width: 48px; text-align: right">Errors</div>
+                </div>
+                <sc-for list="{{mcp}}" as="m" hint-placeholder-count="3">
+                  <div style="display: flex; gap: 10px; align-items: center">
+                    <div aria-hidden="true" style="width: 96px; height: 8px; border-radius: 2px; background: #0c1115; overflow: hidden; flex: none"><div style="width: {{m.w}}; height: 8px; overflow: hidden"><div style="width: 96px; height: 8px; background: linear-gradient(90deg, #6ebbd7, #e2aa56, #f08b81)"></div></div></div>
+                    <div style="flex: 1; min-width: 0">{{m.name}}</div>
+                    <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; width: 50px; text-align: right">{{m.calls}}</div>
+                    <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; color: #b0bbc5; width: 44px; text-align: right">{{m.tools}}</div>
+                    <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; width: 48px; text-align: right; color: {{m.errColor}}">{{m.errors}}</div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="background: #19212a; border: 1px solid #2c3843; border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 9px">
+                <div style="display: flex; justify-content: space-between; align-items: baseline">
+                  <div style="font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">Running now</div>
+                  <div style="font-size: 12px; color: #8a97a4">1 session</div>
+                </div>
+                <div style="background: #0c1115; border-radius: 8px; padding: 12px; display: flex; justify-content: space-between; align-items: center; gap: 12px">
+                  <div style="min-width: 0"><div style="font-weight: 500">agentic-coach, main</div><div style="font-size: 12px; color: #8a97a4">Fable 5.2, running 1h 12m</div></div>
+                  <div style="text-align: right; font-family: 'IBM Plex Mono', ui-monospace, monospace"><div style="color: #e2aa56">64% context</div><div style="font-size: 12px; color: #8a97a4">359k left</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{panelOpen}}" hint-placeholder-val="{{ true }}">
+    <div style="position: absolute; right: 12px; top: 34px; width: 424px; max-height: 854px; box-sizing: border-box; overflow-y: auto; background: #19212a; border: 1px solid #2c3843; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 16px 48px rgba(0,0,0,0.55)">
+
+      <div style="display: flex; align-items: baseline; justify-content: space-between">
+        <div style="font-size: 15px; font-weight: 600">Agentic Coach</div>
+        <div style="font-size: 12px; color: #8a97a4">Updated 2 min ago</div>
+      </div>
+
+      <div style="background: #1b3440; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 3px">
+        <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #b0bbc5">Coach tip</div>
+        <div style="font-weight: 500">agentic-coach, main has passed 600k of context.</div>
+        <div style="color: #b0bbc5">Compact or hand off before the next big step.</div>
+        <button type="button" onClick="{{openPage}}" style="align-self: flex-start; border: 0; background: transparent; padding: 2px 0 0 0; font-size: 12px; font-weight: 500; color: #6ebbd7">See all 3 tips on the coach page</button>
+      </div>
+
+      <div style="display: flex; background: #0c1115; border-radius: 8px; padding: 3px; gap: 3px" role="group" aria-label="Period">
+        <sc-for list="{{periods}}" as="p" hint-placeholder-count="3">
+          <button type="button" onClick="{{p.pick}}" aria-pressed="{{p.on}}" style="flex: 1; height: 30px; border: 0; border-radius: 6px; font-size: 12px; font-weight: 500; background: {{p.bg}}; color: {{p.fg}}">{{p.label}}</button>
+        </sc-for>
+      </div>
+
+      <div style="display: flex; align-items: flex-end; justify-content: space-between">
+        <div>
+          <div style="font-size: 12px; color: #8a97a4">{{heroLabel}}</div>
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 36px; font-weight: 500; line-height: 1.15">{{cost}}</div>
+          <div style="font-size: 11px; color: #8a97a4">API-equivalent, not a bill</div>
+        </div>
+        <div style="text-align: right; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; color: #b0bbc5; display: flex; flex-direction: column; gap: 2px; padding-bottom: 16px">
+          <div>{{calls}} calls</div>
+          <div>{{sessions}} sessions</div>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; align-items: baseline; justify-content: space-between">
+          <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">Tokens</div>
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #b0bbc5">{{tokens}} total, peak {{peakTok}}</div>
+        </div>
+        <svg role="img" aria-label="Line graph of tokens over the chosen period" viewBox="0 0 390 100" style="display: block; width: 100%; height: 100px">
+          <line x1="0" y1="8" x2="390" y2="8" stroke="#2c3843" stroke-width="1" stroke-dasharray="2 4"></line>
+          <line x1="0" y1="52" x2="390" y2="52" stroke="#2c3843" stroke-width="1" stroke-dasharray="2 4"></line>
+          <line x1="0" y1="96" x2="390" y2="96" stroke="#2c3843" stroke-width="1"></line>
+          <polygon points="{{small.area}}" fill="#6ebbd7" fill-opacity="0.12"></polygon>
+          <polyline points="{{small.line}}" fill="none" stroke="#6ebbd7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+          <circle cx="{{small.lastX}}" cy="{{small.lastY}}" r="3.5" fill="#19212a" stroke="#6ebbd7" stroke-width="2"></circle>
+        </svg>
+        <div style="display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #8a97a4">
+          <span>{{x0}}</span><span>{{x1}}</span><span>{{x2}}</span>
+        </div>
+      </div>
+
+      <div style="border-top: 1px solid #2c3843; padding-top: 12px; display: flex; flex-direction: column; gap: 8px">
+        <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">How it went</div>
+        <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+          <sc-for list="{{went}}" as="w" hint-placeholder-count="3">
+            <div>
+              <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 22px; font-weight: 500">{{w.value}}</div>
+              <div style="font-size: 12px; color: #b0bbc5">{{w.name}}</div>
+              <div style="font-size: 11px; color: {{w.color}}">{{w.note}}</div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="border-top: 1px solid #2c3843; padding-top: 12px; display: flex; flex-direction: column; gap: 8px">
+        <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">Limits used</div>
+        <div style="display: flex; align-items: center; gap: 12px">
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 22px; font-weight: 500; width: 60px">7%</div>
+          <div><div style="font-size: 12px; color: #b0bbc5">5-hour, resets in 2h 43m</div><div style="font-size: 12px; color: #6cc693">39% in reserve</div></div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px">
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 22px; font-weight: 500; width: 60px; color: #f08b81">94%</div>
+          <div><div style="font-size: 12px; color: #b0bbc5">Weekly, resets in 2d 18h</div><div style="font-size: 12px; color: #f08b81">33% over pace, runs out in about 6h</div></div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px">
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 22px; font-weight: 500; width: 60px; color: #e2aa56">71%</div>
+          <div><div style="font-size: 12px; color: #b0bbc5">Weekly, Fable, resets in 2d 18h</div><div style="font-size: 12px; color: #e2aa56">10% over pace</div></div>
+        </div>
+      </div>
+
+      <div style="border-top: 1px solid #2c3843; padding-top: 12px; display: flex; flex-direction: column; gap: 8px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline">
+          <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">Running now</div>
+          <div style="font-size: 12px; color: #8a97a4">1 session</div>
+        </div>
+        <div style="background: #0c1115; border-radius: 8px; padding: 10px 12px; display: flex; justify-content: space-between; align-items: center; gap: 12px">
+          <div style="min-width: 0"><div style="font-weight: 500">agentic-coach, main</div><div style="font-size: 12px; color: #8a97a4">Fable 5.2, running 1h 12m</div></div>
+          <div style="text-align: right; font-family: 'IBM Plex Mono', ui-monospace, monospace"><div style="font-size: 14px; color: #e2aa56">64% context</div><div style="font-size: 11px; color: #8a97a4">359k left</div></div>
+        </div>
+      </div>
+
+      <div style="border-top: 1px solid #2c3843; padding-top: 12px; display: flex; flex-direction: column; gap: 8px">
+        <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">By activity</div>
+        <div style="display: flex; align-items: baseline; gap: 10px; font-size: 11px; color: #8a97a4">
+          <div style="width: 64px; flex: none"></div><div style="flex: 1"></div><div style="width: 76px; text-align: right">Cost</div><div style="width: 44px; text-align: right">Turns</div><div style="width: 56px; text-align: right">First try</div>
+        </div>
+        <sc-for list="{{topActs}}" as="a" hint-placeholder-count="5">
+          <div style="display: flex; align-items: center; gap: 10px">
+            <div aria-hidden="true" style="width: 64px; height: 8px; border-radius: 2px; background: #0c1115; overflow: hidden; flex: none"><div style="width: {{a.w}}; height: 8px; overflow: hidden"><div style="width: 64px; height: 8px; background: linear-gradient(90deg, #6ebbd7, #e2aa56, #f08b81)"></div></div></div>
+            <div style="flex: 1; min-width: 0">{{a.name}}</div>
+            <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; width: 76px; text-align: right">{{a.usd}}</div>
+            <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #b0bbc5; width: 44px; text-align: right">{{a.turns}}</div>
+            <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; width: 56px; text-align: right; color: {{a.ftColor}}">{{a.ft}}</div>
+          </div>
+        </sc-for>
+        <button type="button" onClick="{{openPage}}" style="align-self: flex-start; border: 0; background: transparent; padding: 0; font-size: 12px; font-weight: 500; color: #6ebbd7">{{moreActs}}</button>
+      </div>
+
+      <div style="border-top: 1px solid #2c3843; padding-top: 12px; display: flex; justify-content: space-between; align-items: center">
+        <button type="button" onClick="{{openPage}}" style="border: 0; background: transparent; padding: 0; font-size: 13px; font-weight: 500; color: #6ebbd7">Open coach page</button>
+        <span style="font-size: 11px; color: #8a97a4">Reads this Mac only</span>
+      </div>
+    </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  state = { panelOpen: true, pageOpen: false, period: 'today' };
+  renderVals() {
+    var s = this.state || {};
+    var self = this;
+    var period = s.period || 'today';
+    var panelOpen = s.panelOpen !== false;
+    var pageOpen = !!s.pageOpen;
+    var GOOD = '#6cc693', WARN = '#e2aa56', MUTE = '#8a97a4', INK2 = '#b0bbc5', ACC = '#6ebbd7';
+
+    function commas(t) { return t.replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+    function money(n) { return '$' + commas(n.toFixed(2)); }
+    function count(n) { return commas(String(n)); }
+    function graph(vals, W, top, base, pad) {
+      var max = Math.max.apply(null, vals), pk = 0;
+      var pts = vals.map(function (v, i) {
+        if (v > vals[pk]) pk = i;
+        return [Math.round((i / (vals.length - 1)) * (W - 2 * pad) + pad), Math.round(base - (v / max) * (base - top))];
+      });
+      var line = pts.map(function (p) { return p[0] + ',' + p[1]; }).join(' ');
+      var last = pts[pts.length - 1];
+      return { line: line, area: pad + ',' + base + ' ' + line + ' ' + last[0] + ',' + base, lastX: last[0], lastY: last[1], peakX: pts[pk][0], peakY: pts[pk][1] };
+    }
+    function bars(rows, key) {
+      var max = Math.max.apply(null, rows.map(function (r) { return r[key]; }));
+      return function (r) { return Math.max(3, Math.round((r[key] / max) * 100)) + '%'; };
+    }
+    function share(part, total) { var p = Math.round((part / total) * 100); return p < 1 ? 'Under 1%' : p + '%'; }
+
+    var data = {
+      today: {
+        heroLabel: 'Today, Nov 23', total: 27.80, calls: 403, sessions: 4, tokens: '57.3M', peakTok: '14.6M at 10:00',
+        change: 'Down 81% on yesterday', spendTitle: 'Spend by hour', avg: 'Average $2.32 an hour', peakUsd: 'Peak $7.08 at 10:00',
+        x: ['00:00', '06:00', 'Now'],
+        usd: [0.10, 0.05, 0, 0, 0, 0.19, 1.02, 3.30, 4.56, 5.92, 7.08, 5.58],
+        acts: [['Coding', 11.42, 18, 86], ['Conversation', 7.31, 208, null], ['Exploration', 4.10, 97, null], ['Delegation', 2.95, 7, null], ['Feature Dev', 1.10, 49, 71], ['Testing', 0.45, 1, 100], ['Build/Deploy', 0.24, 1, null], ['Brainstorming', 0.12, 15, null], ['Debugging', 0.11, 17, 50]],
+        projects: [['agentic-coach', 20.10, 2], ['Atlas', 7.70, 2]],
+        mcp: [['browser', 22, 5, 0], ['zoho-crm', 9, 3, 1]],
+        went: [['82%', 'First-try edits', 'Up 6 on yesterday', GOOD, '2,30 24,28 46,31 68,24 90,26 112,20 134,22 156,15 178,13 198,10'], ['96%', 'Cache hit', 'Same as yesterday', MUTE, '2,14 24,12 46,15 68,13 90,12 112,16 134,13 156,12 178,14 198,12'], ['3', 'Corrections', 'Up 1 on yesterday', WARN, '2,30 24,26 46,28 68,22 90,25 112,18 134,20 156,14 178,16 198,10']]
+      },
+      week: {
+        heroLabel: 'Last 7 days', total: 612.40, calls: 5120, sessions: 31, tokens: '742M', peakTok: '176M on Nov 22',
+        change: 'Down 38% on the 7 days before', spendTitle: 'Spend by day', avg: 'Average $87.49 a day', peakUsd: 'Peak $145.30 on Nov 22',
+        x: ['Nov 17', 'Nov 20', 'Today'],
+        usd: [72.00, 96.40, 61.20, 131.60, 78.10, 145.30, 27.80],
+        acts: [['Coding', 205.00, 160, 85], ['Conversation', 131.00, 790, null], ['Exploration', 92.00, 372, null], ['Delegation', 71.40, 52, null], ['Feature Dev', 62.60, 130, 74], ['Debugging', 24.00, 61, 60], ['Testing', 14.40, 20, 80], ['Build/Deploy', 7.00, 11, null], ['Brainstorming', 5.00, 36, null]],
+        projects: [['Atlas', 398.10, 21], ['agentic-coach', 153.10, 7], ['Other', 61.20, 3]],
+        mcp: [['zoho-crm', 96, 9, 2], ['browser', 71, 8, 1], ['microsoft-365', 24, 4, 0]],
+        went: [['82%', 'First-try edits', 'Up 6 on the week before', GOOD, '2,30 24,28 46,31 68,24 90,26 112,20 134,22 156,15 178,13 198,10'], ['96%', 'Cache hit', 'Same as the week before', MUTE, '2,14 24,12 46,15 68,13 90,12 112,16 134,13 156,12 178,14 198,12'], ['14', 'Corrections', 'Down 3 on the week before', GOOD, '2,8 24,12 46,10 68,18 90,15 112,22 134,20 156,27 178,25 198,30']]
+      },
+      month: {
+        heroLabel: 'Last 30 days', total: 7509.94, calls: 61300, sessions: 212, tokens: '9.1B', peakTok: '604M on Nov 8',
+        change: 'Down 41% on the 30 days before', spendTitle: 'Spend by day', avg: 'Average $250.33 a day', peakUsd: 'Peak $498.20 on Nov 8',
+        x: ['Oct 25', 'Nov 8', 'Today'],
+        usd: [280, 310, 345, 240, 110, 330, 350, 410, 380, 300, 130, 150, 320, 400, 498.20, 390, 350, 160, 372, 365, 270, 250, 187.34, 72.00, 96.40, 61.20, 131.60, 78.10, 145.30, 27.80],
+        acts: [['Coding', 2410.00, 1840, 84], ['Conversation', 1655.00, 9120, null], ['Exploration', 1120.00, 4310, null], ['Delegation', 905.00, 610, null], ['Feature Dev', 750.94, 1480, 73], ['Debugging', 310.00, 720, 61], ['Testing', 180.00, 240, 78], ['Build/Deploy', 99.00, 130, null], ['Brainstorming', 80.00, 410, null]],
+        projects: [['Atlas', 4912.30, 138], ['agentic-coach', 1840.10, 52], ['Other', 757.54, 22]],
+        mcp: [['zoho-crm', 412, 14, 9], ['browser', 286, 11, 3], ['microsoft-365', 97, 6, 0], ['easel', 12, 1, 0]],
+        went: [['81%', 'First-try edits', 'Up 4 on the month before', GOOD, '2,30 24,28 46,31 68,24 90,26 112,20 134,22 156,15 178,13 198,10'], ['95%', 'Cache hit', 'Down 1 on the month before', MUTE, '2,12 24,12 46,13 68,12 90,14 112,13 134,15 156,14 178,15 198,16'], ['41', 'Corrections', 'Down 9 on the month before', GOOD, '2,8 24,12 46,10 68,18 90,15 112,22 134,20 156,27 178,25 198,30']]
+      }
+    };
+    var d = data[period];
+
+    var actRows = d.acts.map(function (a) { return { name: a[0], n: a[1], turns: a[2], first: a[3] }; });
+    var actW = bars(actRows, 'n');
+    var acts = actRows.map(function (a) {
+      return { name: a.name, w: actW(a), usd: money(a.n), turns: count(a.turns), ft: a.first === null ? 'No edits' : a.first + '%', ftColor: a.first === null ? MUTE : INK2, share: share(a.n, d.total) };
+    });
+    var projRows = d.projects.map(function (r) { return { name: r[0], n: r[1], sessions: r[2] }; });
+    var projW = bars(projRows, 'n');
+    var mcpRows = d.mcp.map(function (m) { return { name: m[0], n: m[1], tools: m[2], errors: m[3] }; });
+    var mcpW = bars(mcpRows, 'n');
+    var defs = [['today', 'Today'], ['week', '7 days'], ['month', '30 days']];
+
+    return {
+      panelOpen: panelOpen, pageOpen: pageOpen, idle: !panelOpen && !pageOpen,
+      itemBg: panelOpen ? '#1b3440' : 'transparent',
+      togglePanel: function () { self.setState({ panelOpen: !panelOpen }); },
+      openPage: function () { self.setState({ pageOpen: true, panelOpen: false }); },
+      closePage: function () { self.setState({ pageOpen: false }); },
+      heroLabel: d.heroLabel, cost: money(d.total), calls: count(d.calls), sessions: count(d.sessions), tokens: d.tokens,
+      peakTok: d.peakTok, change: d.change, spendTitle: d.spendTitle, avg: d.avg, peakUsd: d.peakUsd,
+      x0: d.x[0], x1: d.x[1], x2: d.x[2],
+      small: graph(d.usd, 390, 8, 96, 4),
+      big: graph(d.usd, 1000, 16, 200, 4),
+      acts: acts,
+      topActs: acts.slice(0, 5),
+      moreActs: (acts.length - 5) + ' more on the coach page',
+      projects: projRows.map(function (r) { return { name: r.name, w: projW(r), usd: money(r.n), sessions: count(r.sessions), share: share(r.n, d.total) }; }),
+      mcp: mcpRows.map(function (m) { return { name: m.name, w: mcpW(m), calls: count(m.n), tools: m.tools, errors: m.errors, errColor: m.errors > 0 ? WARN : MUTE }; }),
+      went: d.went.map(function (w) { return { value: w[0], name: w[1], note: w[2], color: w[3], spark: w[4] }; }),
+      periods: defs.map(function (p) {
+        var on = p[0] === period;
+        return { label: p[1], on: on, bg: on ? '#1b3440' : 'transparent', fg: on ? '#e3e9ee' : INK2, pick: function () { self.setState({ period: p[0] }); } };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>

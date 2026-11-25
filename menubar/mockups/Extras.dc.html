@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Coach panel with CodeBurn extras</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+body{margin:0}
+a{color:#6ebbd7}a:hover{color:#9fd3e6}
+</style>
+</helmet>
+<div style="width: 440px; height: 1200px; box-sizing: border-box; background: #0c1115; color: #e3e9ee; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; line-height: 1.4; display: flex; flex-direction: column">
+  <div style="height: 28px; background: #19212a; border-bottom: 1px solid #2c3843; display: flex; align-items: center; justify-content: flex-end; gap: 14px; padding: 0 12px">
+    <div style="display: flex; align-items: center; gap: 6px; background: #1b3440; border-radius: 5px; padding: 2px 8px; height: 22px; box-sizing: border-box">
+      <svg aria-hidden="true" width="16" height="14" viewBox="0 0 16 14" fill="none" stroke="#6ebbd7" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="1,11 5,7 8,9 15,2"></polyline></svg>
+      <span style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; font-weight: 500">$27.80</span>
+    </div>
+    <span style="font-size: 12px; color: #b0bbc5">Mon Nov 23 11:41</span>
+  </div>
+
+  <div style="margin: 8px 8px 0 8px; background: #19212a; border: 1px solid #2c3843; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 16px">
+
+    <div style="display: flex; align-items: baseline; justify-content: space-between">
+      <div style="font-size: 15px; font-weight: 600">Agentic Coach</div>
+      <div style="font-size: 12px; color: #8a97a4">Updated 2 min ago</div>
+    </div>
+
+    <div style="background: #1b3440; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 4px">
+      <div style="display: flex; justify-content: space-between; align-items: baseline">
+        <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #b0bbc5">Coach tip</div>
+        <div style="font-size: 11px; font-weight: 600; color: #6ebbd7; border: 1px solid #6ebbd7; border-radius: 999px; padding: 0 7px">Extra 1</div>
+      </div>
+      <div style="font-weight: 500">agentic-coach, main has passed 600k of context.</div>
+      <div style="color: #b0bbc5">Compact or hand off before the next big step.</div>
+      <a href="#" style="font-size: 12px; font-weight: 500; text-decoration: none; margin-top: 2px">See all 3 tips on the coach page</a>
+    </div>
+
+    <div style="display: flex; background: #0c1115; border-radius: 8px; padding: 3px; gap: 3px">
+      <div style="flex: 1; height: 30px; border-radius: 6px; font-size: 12px; font-weight: 500; background: #1b3440; color: #e3e9ee; display: flex; align-items: center; justify-content: center">Today</div>
+      <div style="flex: 1; height: 30px; border-radius: 6px; font-size: 12px; font-weight: 500; color: #b0bbc5; display: flex; align-items: center; justify-content: center">7 days</div>
+      <div style="flex: 1; height: 30px; border-radius: 6px; font-size: 12px; font-weight: 500; color: #b0bbc5; display: flex; align-items: center; justify-content: center">30 days</div>
+    </div>
+
+    <div style="display: flex; align-items: flex-end; justify-content: space-between">
+      <div>
+        <div style="font-size: 12px; color: #8a97a4">Today, Nov 23</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 38px; font-weight: 500; line-height: 1.15; letter-spacing: -0.01em">$27.80</div>
+        <div style="font-size: 11px; color: #8a97a4">API-equivalent, not a bill</div>
+      </div>
+      <div style="text-align: right; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; color: #b0bbc5; display: flex; flex-direction: column; gap: 2px; padding-bottom: 16px">
+        <div>403 calls</div>
+        <div>4 sessions</div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <div style="display: flex; align-items: baseline; justify-content: space-between">
+        <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">Tokens</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #b0bbc5">57.3M total, peak 14.6M at 10:00</div>
+      </div>
+      <svg role="img" aria-label="Line graph of tokens by hour today" width="406" height="110" viewBox="0 0 406 110" style="display: block; width: 100%; height: 110px">
+        <line x1="0" y1="8" x2="406" y2="8" stroke="#2c3843" stroke-width="1" stroke-dasharray="2 4"></line>
+        <line x1="0" y1="57" x2="406" y2="57" stroke="#2c3843" stroke-width="1" stroke-dasharray="2 4"></line>
+        <line x1="0" y1="106" x2="406" y2="106" stroke="#2c3843" stroke-width="1"></line>
+        <polygon points="4,106 4,105 40,105 76,106 112,106 149,106 185,103 221,92 257,60 294,43 330,24 366,8 402,29 402,106" fill="#6ebbd7" fill-opacity="0.12"></polygon>
+        <polyline points="4,105 40,105 76,106 112,106 149,106 185,103 221,92 257,60 294,43 330,24 366,8 402,29" fill="none" stroke="#6ebbd7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+        <circle cx="402" cy="29" r="3.5" fill="#19212a" stroke="#6ebbd7" stroke-width="2"></circle>
+      </svg>
+      <div style="display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #8a97a4">
+        <span>00:00</span><span>06:00</span><span>Now</span>
+      </div>
+    </div>
+
+    <div style="border-top: 1px solid #2c3843; padding-top: 14px; display: flex; flex-direction: column; gap: 8px">
+      <div style="display: flex; justify-content: space-between; align-items: baseline">
+        <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">How it went</div>
+        <div style="font-size: 11px; font-weight: 600; color: #6ebbd7; border: 1px solid #6ebbd7; border-radius: 999px; padding: 0 7px">Extra 2</div>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+        <div>
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 24px; font-weight: 500">82%</div>
+          <div style="font-size: 12px; color: #b0bbc5">First-try edits</div>
+          <div style="font-size: 11px; color: #6cc693">Up 6 on last week</div>
+        </div>
+        <div>
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 24px; font-weight: 500">96%</div>
+          <div style="font-size: 12px; color: #b0bbc5">Cache hit</div>
+          <div style="font-size: 11px; color: #8a97a4">Same as last week</div>
+        </div>
+        <div>
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 24px; font-weight: 500">3</div>
+          <div style="font-size: 12px; color: #b0bbc5">Corrections</div>
+          <div style="font-size: 11px; color: #e2aa56">Up 1 on yesterday</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="border-top: 1px solid #2c3843; padding-top: 14px; display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; justify-content: space-between; align-items: baseline">
+        <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">Limits used</div>
+        <div style="font-size: 11px; font-weight: 600; color: #6ebbd7; border: 1px solid #6ebbd7; border-radius: 999px; padding: 0 7px">Extra 3: pace</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px">
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 24px; font-weight: 500; width: 64px">7%</div>
+        <div>
+          <div style="font-size: 12px; color: #b0bbc5">5-hour, resets in 2h 43m</div>
+          <div style="font-size: 12px; color: #6cc693">39% in reserve</div>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px">
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 24px; font-weight: 500; width: 64px; color: #f08b81">94%</div>
+        <div>
+          <div style="font-size: 12px; color: #b0bbc5">Weekly, resets in 2d 18h</div>
+          <div style="font-size: 12px; color: #f08b81">33% over pace, runs out in about 6h</div>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px">
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 24px; font-weight: 500; width: 64px; color: #e2aa56">71%</div>
+        <div>
+          <div style="font-size: 12px; color: #b0bbc5">Weekly, Fable, resets in 2d 18h</div>
+          <div style="font-size: 12px; color: #e2aa56">10% over pace</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="border-top: 1px solid #2c3843; padding-top: 14px; display: flex; flex-direction: column; gap: 8px">
+      <div style="display: flex; justify-content: space-between; align-items: baseline">
+        <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">Running now</div>
+        <div style="font-size: 12px; color: #8a97a4">1 session</div>
+      </div>
+      <div style="background: #0c1115; border-radius: 8px; padding: 10px 12px; display: flex; justify-content: space-between; align-items: center; gap: 12px">
+        <div style="min-width: 0">
+          <div style="font-weight: 500">agentic-coach, main</div>
+          <div style="font-size: 12px; color: #8a97a4">Fable 5.2, running 1h 12m</div>
+        </div>
+        <div style="text-align: right; font-family: 'IBM Plex Mono', ui-monospace, monospace">
+          <div style="font-size: 14px; color: #e2aa56">64% context</div>
+          <div style="font-size: 11px; color: #8a97a4">359k left</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="border-top: 1px solid #2c3843; padding-top: 14px; display: flex; flex-direction: column; gap: 8px">
+      <div style="display: flex; justify-content: space-between; align-items: baseline">
+        <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8a97a4">By activity</div>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 10px; font-size: 11px; color: #8a97a4">
+        <div style="width: 64px; flex: none"></div>
+        <div style="flex: 1"></div>
+        <div style="width: 60px; text-align: right">Cost</div>
+        <div style="width: 40px; text-align: right">Turns</div>
+        <div style="width: 56px; text-align: right">First try</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px">
+        <div aria-hidden="true" style="width: 64px; height: 8px; border-radius: 2px; background: #0c1115; overflow: hidden; flex: none"><div style="width: 100%; height: 8px; overflow: hidden"><div style="width: 64px; height: 8px; background: linear-gradient(90deg, #6ebbd7, #e2aa56, #f08b81)"></div></div></div>
+        <div style="flex: 1; min-width: 0">Coding</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; width: 60px; text-align: right">$11.42</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #b0bbc5; width: 40px; text-align: right">18</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #b0bbc5; width: 56px; text-align: right">86%</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px">
+        <div aria-hidden="true" style="width: 64px; height: 8px; border-radius: 2px; background: #0c1115; overflow: hidden; flex: none"><div style="width: 64%; height: 8px; overflow: hidden"><div style="width: 64px; height: 8px; background: linear-gradient(90deg, #6ebbd7, #e2aa56, #f08b81)"></div></div></div>
+        <div style="flex: 1; min-width: 0">Conversation</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; width: 60px; text-align: right">$7.31</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #b0bbc5; width: 40px; text-align: right">208</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #8a97a4; width: 56px; text-align: right">No edits</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px">
+        <div aria-hidden="true" style="width: 64px; height: 8px; border-radius: 2px; background: #0c1115; overflow: hidden; flex: none"><div style="width: 36%; height: 8px; overflow: hidden"><div style="width: 64px; height: 8px; background: linear-gradient(90deg, #6ebbd7, #e2aa56, #f08b81)"></div></div></div>
+        <div style="flex: 1; min-width: 0">Exploration</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; width: 60px; text-align: right">$4.10</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #b0bbc5; width: 40px; text-align: right">97</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #8a97a4; width: 56px; text-align: right">No edits</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px">
+        <div aria-hidden="true" style="width: 64px; height: 8px; border-radius: 2px; background: #0c1115; overflow: hidden; flex: none"><div style="width: 26%; height: 8px; overflow: hidden"><div style="width: 64px; height: 8px; background: linear-gradient(90deg, #6ebbd7, #e2aa56, #f08b81)"></div></div></div>
+        <div style="flex: 1; min-width: 0">Delegation</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; width: 60px; text-align: right">$2.95</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #b0bbc5; width: 40px; text-align: right">7</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #8a97a4; width: 56px; text-align: right">No edits</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px">
+        <div aria-hidden="true" style="width: 64px; height: 8px; border-radius: 2px; background: #0c1115; overflow: hidden; flex: none"><div style="width: 10%; height: 8px; overflow: hidden"><div style="width: 64px; height: 8px; background: linear-gradient(90deg, #6ebbd7, #e2aa56, #f08b81)"></div></div></div>
+        <div style="flex: 1; min-width: 0">Feature Dev</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; width: 60px; text-align: right">$1.10</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #b0bbc5; width: 40px; text-align: right">49</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #b0bbc5; width: 56px; text-align: right">71%</div>
+      </div>
+      <a href="#" style="font-size: 12px; font-weight: 500; text-decoration: none">4 more on the coach page</a>
+    </div>
+
+    <div style="border-top: 1px solid #2c3843; padding-top: 12px; display: flex; justify-content: space-between; align-items: center">
+      <a href="#" style="font-size: 13px; font-weight: 500; text-decoration: none">Open coach page</a>
+      <span style="font-size: 11px; color: #8a97a4">Reads this Mac only</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":440,"height":1200}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

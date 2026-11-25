@@ -1614,5 +1614,431 @@ class EmptyFeedTest(unittest.TestCase):
             self.assertFalse(build_site.feed_is_empty(self.feed(version=newer)), newer)
 
 
+M = 1000000
+
+
+def ledger_session(project, model, out_main, out_sub=0):
+    """A ledger row with output tokens only, so its cost is easy to work out."""
+    return {"project": project, "scheduled": False,
+            "models": {model: [[0, out_main, 0, 0, 0], [0, out_sub, 0, 0, 0]]}}
+
+
+def cost_ledger():
+    """Three days: one in August (All time then spans over 60 days), six projects on Nov 16,
+    one session on Nov 17, the build day. Output prices per M: Fable 5.2 $40, Opus 5.5 $20,
+    Sonnet 5.5 $10, Haiku 5.5 $0.50."""
+    return {"version": build_site.L.VERSION, "days": {
+        "2026-08-03": {"sessions": {"old00001": ledger_session("alpha", "claude-opus-5-5", M)}},
+        "2026-11-16": {"sessions": {
+            "s1aaaaaa": ledger_session("alpha", "claude-fable-5-2", M, M // 2),     # $40 + $20
+            "s2bbbbbb": ledger_session("beta", "claude-opus-5-5", M // 2),          # $10
+            "s3cccccc": ledger_session("gamma", "claude-sonnet-5-5", M // 2),       # $5
+            "s4dddddd": ledger_session("delta", "claude-haiku-5-5", 4 * M),         # $2
+            "s5eeeeee": ledger_session("epsilon", "claude-opus-5-5", M // 20),      # $1
+            "s6ffffff": ledger_session("zeta", "claude-opus-5-5", M // 40)}},       # $0.50
+        "2026-11-17": {"sessions": {"s7gggggg": ledger_session("alpha", "claude-opus-5-5", M // 4)}}}}
+
+
+COST_DIGEST = {"totals": {"sessions": 2}, "sessions": [
+    {"id": "s1aaaaaa-0000", "project_name": "alpha", "title": "Build the cost tab",
+     "cost": {"usd": 40.0}, "subagents": {"cost": {"usd": 20.0}}},
+    {"id": "s2bbbbbb-0000", "project_name": "beta", "title": "", "cost": {"usd": 10.0}}]}
+
+
+def model_rows():
+    return [
+        {"name": "Claude Fable 5.2", "usd": 4982.10, "share": 0.66, "main_usd": 1120.40, "sub_usd": 3861.70,
+         "first_try": 0.76, "edit_turns": 410, "tool_calls": 2340, "tool_errors": 96, "error_rate": 0.041,
+         "redone_edits": 44, "corrections": 21, "where_most": "Testing, Debugging, Coding",
+         "where": [{"name": "Bash", "kind": "tool", "errors": 58, "redone_edits": 31, "corrections": 6},
+                   {"name": "Edit", "kind": "tool", "errors": 17, "redone_edits": 13, "corrections": 9},
+                   {"name": "zoho-crm", "kind": "mcp", "errors": 3, "redone_edits": 0, "corrections": 4}]},
+        {"name": "Claude Opus 5.5", "usd": 2401.40, "share": 0.32, "first_try": 0.88, "edit_turns": 120,
+         "tool_calls": 1000, "tool_errors": 20, "error_rate": None, "redone_edits": 9, "corrections": 17,
+         "where_most": "Delegation", "where": []},
+        {"name": "Claude Haiku 5.5 (long prompt)", "usd": 0.42, "share": 0.0001, "where_most": None},
+        {"name": "Claude Sonnet 5.5", "usd": 186.32, "share": 0.02, "first_try": None, "edit_turns": 0,
+         "tool_calls": 750, "tool_errors": 3, "error_rate": 0.004, "redone_edits": 0, "corrections": 0,
+         "where_most": None, "where": None},
+        {"name": "Claude Haiku 5.5", "usd": 20.13, "share": 0.003, "first_try": None, "tool_calls": 0,
+         "tool_errors": 0, "error_rate": None, "redone_edits": 0, "corrections": 0, "where_most": None},
+        {"name": "Claude Sonnet 5", "usd": 3.10, "share": None},
+    ]
+
+
+class CostTabTest(SiteBase):
+    write_feed = OverviewTest.write_feed
+    run_build = OverviewTest.run_build
+    run_script = OverviewTest.run_script
+
+    def setUp(self):
+        SiteBase.setUp(self)
+        write(os.path.join(self.tmp, "coach-home", "ledger.json"), json.dumps(cost_ledger()))
+        write(os.path.join(self.reports, "digests", "daily-2026-11-16.json"), json.dumps(COST_DIGEST))
+
+    def test_split_parts_fold_past_four_into_other(self):
+        rows = [{"name": n, "usd": v} for n, v in
+                (("a", 60), ("b", 10), ("c", 5), ("d", 2), ("e", 1), ("f", 0.5), ("g", 0))]
+        parts = build_site.split_parts(rows)
+        self.assertEqual([(p["name"], p["usd"], p["folded"]) for p in parts],
+                         [("a", 60, 0), ("b", 10, 0), ("c", 5, 0), ("Other", 3.5, 3)])
+        self.assertAlmostEqual(sum(p["share"] for p in parts), 1.0, places=3)
+        four = build_site.split_parts(rows[:4])                 # four fit: no Other
+        self.assertEqual([p["name"] for p in four], ["a", "b", "c", "d"])
+        self.assertEqual(build_site.split_parts([{"name": "x", "usd": 0}, {"name": "y", "usd": None}]), [])
+        self.assertEqual(build_site.split_parts([{"name": "y", "usd": 2}, {"name": "x", "usd": 6}])[0]["name"], "x")
+
+    def test_split_comes_from_the_ledger_for_each_period(self):
+        page, _ = self.run_build()
+        cost = self.page_data(page)["cost"]
+        self.assertEqual(sorted(cost["periods"]), ["all", "month", "today", "week"])
+        week = cost["periods"]["week"]["t"]
+        self.assertAlmostEqual(week["usd"], 83.5, places=2)
+        split = week["split"]
+        self.assertEqual([(p["name"], p["usd"]) for p in split["project"]],
+                         [("alpha", 65.0), ("beta", 10.0), ("gamma", 5.0), ("Other", 3.5)])
+        self.assertEqual(split["project"][-1]["folded"], 3)
+        self.assertEqual([(p["name"], p["usd"]) for p in split["model"]],
+                         [("Claude Fable 5.2", 60.0), ("Claude Opus 5.5", 16.5),
+                          ("Claude Sonnet 5.5", 5.0), ("Claude Haiku 5.5", 2.0)])
+        self.assertEqual([(p["name"], p["usd"]) for p in split["agent"]],
+                         [("Main sessions", 63.5), ("Subagents", 20.0)])
+        for key in ("model", "project", "agent"):
+            self.assertAlmostEqual(sum(p["usd"] for p in split[key]), week["usd"], places=1)
+        today = cost["periods"]["today"]["t"]
+        self.assertEqual((today["days"], today["usd"]), (1, 5.0))
+        self.assertEqual(cost["periods"]["all"]["t"]["days"], 3)
+        self.assertAlmostEqual(cost["periods"]["all"]["t"]["usd"], 103.5, places=2)
+        # By token type: the price range of the models used, and the note on the costliest type
+        out = dict((r["type"], r) for r in week["by_type"])["Output"]
+        self.assertEqual(out["price"], "$0.50 to $40 per M")
+        self.assertEqual(week["type_note"], build_site.TYPE_NOTES["Output"])
+        # Top sessions: from the ledger, every day; a title where a digest has one
+        sess = cost["periods"]["week"]["sessions"]
+        self.assertEqual([(s["id"], s["title"], s["day"], s["when"], s["usd"], s["sub_usd"]) for s in sess],
+                         [("s1aaaaaa", "Build the cost tab", "2026-11-16", "Nov 16", 60.0, 20.0),
+                          ("s2bbbbbb", "", "2026-11-16", "Nov 16", 10.0, 0.0),
+                          ("s3cccccc", "", "2026-11-16", "Nov 16", 5.0, 0.0),      # more tokens than s7
+                          ("s7gggggg", "", "2026-11-17", "Nov 17", 5.0, 0.0),
+                          ("s4dddddd", "", "2026-11-16", "Nov 16", 2.0, 0.0),
+                          ("s5eeeeee", "", "2026-11-16", "Nov 16", 1.0, 0.0),
+                          ("s6ffffff", "", "2026-11-16", "Nov 16", 0.5, 0.0)])
+        self.assertEqual(cost["periods"]["week"]["session_count"], 7)
+        self.assertEqual([s["id"] for s in cost["periods"]["today"]["sessions"]], ["s7gggggg"])
+        self.assertEqual(cost["periods"]["all"]["session_count"], 8)
+
+    def test_cost_graph_per_period(self):
+        page, _ = self.run_build()
+        graphs = dict((k, page.split('<template id="cg-%s">' % k, 1)[1].split("</template>", 1)[0])
+                      for k in ("today", "week", "month", "all"))
+        week = graphs["week"]
+        self.assertEqual(week.count('<g class="b"'), 7)                  # a stem and dot a day
+        self.assertEqual(week.count('class="cg-dot pk"'), 1)
+        self.assertIn('data-r="Mon Nov 16" data-v="$78.50" data-n="Above your average"', week)
+        self.assertIn('data-n="Below your average"', week)
+        self.assertIn('class="cg-peak"', week)
+        self.assertIn(">Peak $79<", week)
+        self.assertIn('class="cg-avg"', week)
+        self.assertIn(">average $12 a day<", week)
+        self.assertIn('data-unit="day">Average $12 a day, peak <b>$79</b>', week)
+        self.assertIn(">Today</span>", week)
+        # All time over 60 days: a point a week, each on its Monday
+        allt = graphs["all"]
+        self.assertIn('data-unit="week"', allt)
+        self.assertIn('data-r="Week of Aug 3"', allt)
+        self.assertIn(">This week</span>", allt)
+        self.assertEqual(allt.count('<g class="b"'), 16)
+        # the scale's top is round and so is its half
+        self.assertIn(">$100</span>", week)
+        self.assertIn(">$50</span>", week)
+        # the feed's series wins where it has one (here Today, by the hour)
+        feed = live_feed()
+        self.write_feed(feed)
+        page, _ = self.run_build()
+        today = page.split('<template id="cg-today">', 1)[1].split("</template>", 1)[0]
+        self.assertIn('data-unit="hour"', today)
+        self.assertIn('data-r="04:00" data-v="$6.90"', today)
+        self.assertEqual(build_site.cost_graph("week", [], "day", "2026-11-17"), "")
+        g = build_site.cost_graph("week", [("2026-11-15T00:00", 1), ("2026-11-16T00:00", 8),
+                                            ("2026-11-17T00:00", 10)], "day", "2026-11-17")
+        self.assertIn('class="cg-dot hi"', g)                         # above the average, not the peak
+        self.assertIn('class="cg-dot pk last"', g)
+        self.assertIn('class="cg-dot lo"', g)
+
+    def test_removed_tables_and_the_period_hash(self):
+        page, _ = self.run_build()
+        for gone in ('costBlock("By project"', '"By model", sortable', "function sortable", "costIdx",
+                     'class="chart cost-chart"', "By session, top", "All time means since"):
+            self.assertNotIn(gone, page, gone)
+        self.assertNotIn('<h2 class="view-title">Cost</h2>', page)
+        # the summary row as it was
+        self.assertIn('[[usd(t.usd), "API-equivalent, not a bill"], [tok(t.tokens), "tokens"], '
+                      '[tok(t.out), "output tokens"],', page)
+        # the period buttons drive the Cost tab too, and its address keeps the period
+        self.assertIn('var at = view === "cost" ? "cost" : "overview";', page)
+        self.assertIn('history.replaceState(null, "", "#" + at + "/" + p)', page)
+        self.assertIn('(v === "overview" || v === "cost") && hash[0] === v && PERIODS.indexOf(hash[1]) >= 0', page)
+        self.assertIn('(v === "cost" && !!D.cost)', page)
+        self.assertIn('localStorage.setItem("coach.split", split)', page)
+
+    def test_series_colours_in_both_themes(self):
+        page, _ = self.run_build()
+        css = page.split("<style", 1)[1].split("</style>", 1)[0]
+        self.assertEqual(css.count("--s1: #6366f1; --s2: #a78bfa; --s3: #2dd4bf; --s4: #38bdf8;"), 2)
+        light = re.search(r"--s1: (#\w+); --s2: (#\w+); --s3: (#\w+); --s4: (#\w+);", css).groups()
+
+        def lum(c):
+            v = [int(c[i:i + 2], 16) / 255.0 for i in (1, 3, 5)]
+            v = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in v]
+            return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]
+        for c in light:                                   # 3:1 on the light card, for bars
+            self.assertGreaterEqual((lum("#fcfcfb") + 0.05) / (lum(c) + 0.05), 3.0, c)
+        # series colours stay off status: no warn, crit or good colour among them
+        for status in ("#fab219", "#d03b3b", "#0ca30c", "#ec6a6a"):
+            self.assertNotIn(status, light)
+
+    def test_model_rows_levels_and_fold(self):
+        self.assertEqual([build_site.error_level(r) for r in (None, 0.0, 0.0199, 0.02, 0.0399, 0.04, 0.2)],
+                         [None, None, None, "warn", "warn", "crit", "crit"])
+        rows = build_site.live_models(model_rows())
+        self.assertEqual([m["name"] for m in rows],
+                         ["Claude Fable 5.2", "Claude Opus 5.5", "Claude Sonnet 5.5", "Claude Haiku 5.5"])
+        fable, opus, sonnet, haiku = rows
+        self.assertEqual((fable["error_level"], fable["rework_level"]), ("crit", "warn"))
+        self.assertEqual((opus["error_rate"], opus["error_level"], opus["rework_level"]), (0.02, "warn", None))
+        self.assertEqual((sonnet["error_level"], sonnet["where"], sonnet["first_try"]), (None, [], None))
+        self.assertIsNone(haiku["error_rate"])                # no tool calls: nothing to divide by
+        self.assertEqual([w["heat"] for w in fable["where"]], [100, 29, 5])
+        self.assertEqual(fable["heat"], 100)
+        self.assertEqual(build_site.smaller_models(model_rows()), {"count": 2, "usd": 3.52})
+        self.assertIsNone(build_site.smaller_models(model_rows()[:4]))
+        self.assertIsNone(build_site.live_models(None))
+        self.assertIsNone(build_site.live_models({"name": "x"}))
+        # rework: redone edits 9 and 10 either side of the amber line
+        edge = build_site.live_models([{"name": "a", "redone_edits": 9}, {"name": "b", "redone_edits": 10}])
+        self.assertEqual([m["rework_level"] for m in edge], [None, "warn"])
+        # a server name the rules leave out is not shown under a model
+        hide = build_site.Hide([{"match": ["zoho"]}], [])
+        self.assertEqual([w["name"] for w in build_site.live_models(model_rows(), hide)[0]["where"]], ["Bash", "Edit"])
+
+    def test_rework_note(self):
+        note = build_site.rework_note(build_site.live_models(model_rows()))
+        self.assertEqual(note["lead"], "Most rework: Claude Fable 5.2.")
+        self.assertEqual(note["rest"], "31 of its 44 redone edits were in Bash. "
+                                       "Its Bash calls fail most: 58 of 96 errors.")
+        plain = build_site.rework_note(build_site.live_models([{"name": "Opus", "redone_edits": 1, "corrections": 3}]))
+        self.assertEqual(plain["rest"], "1 redone edit and 3 corrections in all.")
+        self.assertIsNone(build_site.rework_note(build_site.live_models([{"name": "Haiku", "redone_edits": 0}])))
+        self.assertIsNone(build_site.rework_note(None))
+
+    def test_sessions_over_midnight_count_once_and_years_show(self):
+        led = cost_ledger()
+        led["days"]["2026-11-17"]["sessions"]["s1aaaaaa"] = ledger_session(
+            "alpha", "claude-opus-5-5", M // 4, M // 20)                        # $5 + $1
+        write(os.path.join(self.tmp, "coach-home", "ledger.json"), json.dumps(led))
+        page, _ = self.run_build()
+        week = self.page_data(page)["cost"]["periods"]["week"]
+        self.assertEqual(week["session_count"], 7)
+        first = week["sessions"][0]
+        self.assertEqual((first["title"], first["day"], first["usd"], first["sub_usd"]),
+                         ("Build the cost tab", "2026-11-17", 66.0, 21.0))   # under the latest day it ran
+        self.assertEqual([s["id"] for s in week["sessions"]].count("s1aaaaaa"), 1)
+        self.assertEqual(build_site.year_day("2025-12-29", "2026-01-02"), "Dec 29, 2025")
+        self.assertEqual(build_site.year_day("2026-01-02", "2026-01-02"), "Jan 2")
+        self.assertEqual(build_site._point_names("2025-12-29T00:00", "week", "2026-01-02"),
+                         "Week of Dec 29, 2025")
+        # a ledger day from a wrong clock does not stretch All time past ten years
+        days = build_site.cost_days("all", "2026-11-17", "1970-01-01")
+        self.assertEqual((len(days), days[-1]), (build_site.COST_MAX_DAYS, "2026-11-17"))
+
+    def test_today_without_a_ledger_day_shows_the_hours(self):
+        led = cost_ledger()
+        del led["days"]["2026-11-17"]
+        write(os.path.join(self.tmp, "coach-home", "ledger.json"), json.dumps(led))
+        self.write_feed(live_feed())
+        page, _ = self.run_build()
+        today = self.page_data(page)["cost"]["periods"]["today"]
+        self.assertEqual((today["t"]["days"], today["live_hours"]), (0, True))
+        self.assertIn("Today's totals and split are recorded at the next recap.", page)
+        # the 7-day graph is drawn from the ledger, so it adds up to the figures beside it
+        week = page.split('<template id="cg-week">', 1)[1].split("</template>", 1)[0]
+        self.assertIn('data-unit="day"', week)
+        self.assertIn('data-r="Mon Nov 16" data-v="$78.50"', week)
+
+    def test_the_feed_hours_are_not_used_past_a_date_or_account_rule(self):
+        path = os.path.join(self.tmp, "coach-home", "ledger.json")
+        live = build_site.live_view(live_feed())
+        data, _g = build_site.load_cost(self.reports, "2026-11-17", path, build_site.NO_HIDE, live)
+        self.assertTrue(data["periods"]["today"]["live_hours"])
+        for cfg in ({"exclude_dates": [("2026-11-17", None)]}, {"only_account": "11aa22"}):
+            hide = build_site.Hide(scope=build_site.SC.Scope(cfg=cfg))
+            data, graphs = build_site.load_cost(self.reports, "2026-11-17", path, hide, live)
+            self.assertFalse(data["periods"]["today"]["live_hours"], cfg)
+            self.assertNotIn('data-unit="hour"', graphs, cfg)
+
+    def test_where_most_naming_a_left_out_server_is_dropped(self):
+        rows = model_rows()
+        rows[0]["where_most"] = "zoho-crm, Testing"
+        hide = build_site.Hide([{"match": ["zoho"]}], [])
+        self.assertIsNone(build_site.live_models(rows, hide)[0]["where_most"])
+        self.assertEqual(build_site.live_models(rows)[0]["where_most"], "zoho-crm, Testing")
+
+    def test_feed_without_models_hides_the_card(self):
+        view = build_site.live_view(live_feed())
+        self.assertIsNone(view["periods"]["today"]["models"])
+        self.assertIsNone(view["periods"]["today"]["models_more"])
+        feed = live_feed()
+        feed["periods"]["week"]["models"] = model_rows()
+        week = build_site.live_view(feed)["periods"]["week"]
+        self.assertEqual(len(week["models"]), 4)
+        self.assertEqual(week["model_note"]["model"], "Claude Fable 5.2")
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed: the page's script is not run")
+    def test_the_page_script_draws_the_cost_tab_and_by_model(self):
+        feed = live_feed()
+        feed["periods"]["week"]["models"] = model_rows()
+        got = self.run_script(feed, "2026-11-23T11:43:00+02:00")
+        week = got["periods"]["week"]
+        self.assertNotIn("Update the coach", week["tree"] + week["cost"])
+        for said in ('"By model"', '"Errors and rework are counted on the model that made the call"',
+                     '"Mostly Testing, Debugging, Coding"', '"66% of spend"', '"Under 1% of spend"',
+                     'div.fig.is-crit "96"', 'div.fig.is-warn "44 edits"', '"and 21 corrections"',
+                     '"4.1% of tool calls"', '"no tool calls"', '"No edits"', 'div.fig.is-good "None"',
+                     '"Where the errors were"', '"zoho-crm, MCP"', '"2 smaller models, $3.52"',
+                     '"Most rework: Claude Fable 5.2."', 'title="Tool calls this model made that failed'):
+            self.assertIn(said, week["tree"], said)
+        for key in ("today", "month", "all"):
+            self.assertNotIn('"By model"', got["periods"][key]["tree"], key)   # no models: no card
+        cost = week["cost"]
+        for said in ('"$84"', '"API-equivalent, not a bill"', '"2"',
+                     '"days with data"', '"Split by"', 'aria-pressed="true"', '"Model"', '"Project"',
+                     '"Main or subagent"', '"Claude Fable 5.2"', '"72%"', 'section.cs-card.cs-top',
+                     '"Top sessions"', '"Build the cost tab"', '"Session s2bbbbbb"', '"Nov 16"',
+                     '"By token type"', '"$0.50 to $40 per M"', "div.tt-bar",
+                     '"Output costs the most: the answers and the files Claude writes. List prices as of Nov 17."'):
+            self.assertIn(said, cost, said)
+        for gone in ('"By project"', '"By session', "Period"):
+            self.assertNotIn(gone, cost, gone)
+        today = got["periods"]["today"]["cost"]
+        self.assertIn('"Session s7gggggg"', today)                 # the ledger's today
+        self.assertIn('"$5.00"', today)
+        self.assertIn('"day with data"', today)
+        # a period with cost but no session to list still says when sessions come
+        page, _ = self.run_build()
+        self.assertIn('text: "Sessions are listed once the day\'s recap has run."', page)
+
+
+class TopSessionsTest(unittest.TestCase):
+    """Top sessions on the Cost tab come from the ledger, so every period lists its own days,
+    whatever digests there are and whatever settings they were counted under."""
+    TODAY = "2026-11-17"
+    RULES = [{"match": ["secret"]}]
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.home = os.path.join(self.tmp, "coach-home")
+        self.reports = os.path.join(self.home, "reports")
+        old = os.environ.get("COACH_HOME")
+        os.environ["COACH_HOME"] = self.home
+        self.addCleanup(lambda: os.environ.__setitem__("COACH_HOME", old) if old is not None
+                        else os.environ.pop("COACH_HOME", None))
+        opus = "claude-opus-5-5"                                            # output $20 per M
+        led = {"version": build_site.L.VERSION, "days": {
+            "2026-08-29": {"sessions": {"aaaa0001-x": ledger_session("alpha", opus, M)}},           # $20
+            "2026-11-01": {"sessions": {"bbbb0002-x": ledger_session("beta", opus, M // 2)}},       # $10
+            "2026-11-10": {"sessions": {"cccc0003-x": ledger_session("gamma", opus, M // 4)}},      # $5
+            "2026-11-12": {"sessions": {"cccc0003-x": ledger_session("gamma", opus, M // 4, M // 20)}},  # $5 + $1
+            "2026-11-16": {"sessions": {
+                "dddd0004-x": ledger_session("delta", opus, M // 10),                               # $2
+                "ffff0006-x": ledger_session("secret-work", opus, M),          # an exclude rule's project
+                "gggg0007-x": ledger_session("delta", opus, M),               # a digest says it is left out
+                "hhhh0008-x": ledger_session("theta", opus, M)}},             # the live cache says it is hidden
+            "2026-11-17": {"sessions": {"eeee0005-x": ledger_session("epsilon", opus, M // 20),   # $1
+                                        "iiii0009-x": {"project": "iota", "scheduled": True,
+                                                       "models": {opus: [[0] * 5, [0] * 5]}}}}}}
+        self.hide = build_site.Hide(self.RULES, [], build_site.SC.Scope(
+            cfg={"exclude": self.RULES, "only_account": "11aa22"}))
+        led["exclude_sig"] = self.hide.scope.sig()           # written under the settings in force
+        self.led = led
+        self.ledger = os.path.join(self.home, "ledger.json")
+        write(self.ledger, json.dumps(led))
+        # the only digest: Nov 16, counted under older account rules (another scope_sig)
+        write(os.path.join(self.reports, "digests", "daily-2026-11-16.json"), json.dumps({
+            "scope_sig": "0123456789abcdef", "sessions": [
+                {"id": "dddd0004-x", "project_name": "delta", "title": "Delta work", "cost": {"usd": 2.0}},
+                {"id": "gggg0007-x", "project_name": "delta", "title": "The secret plan", "cost": {"usd": 20.0}},
+                {"id": "zzzz9999-x", "project_name": "other", "title": "Other account job",
+                 "cost": {"usd": 99.0}}]}))
+        # the live feed's cache: a custom title for one session, a hidden one for another
+        write(os.path.join(self.home, "live-cache.json"), json.dumps({"sig": self.hide.scope.sig(), "files": {
+            "/p/b.jsonl": {"sid": "bbbb0002-x", "sub": False, "project": "beta",
+                           "meta": {"titles": ["beta ai title"], "ctitles": ["Beta custom"]}},
+            "/p/h.jsonl": {"sid": "hhhh0008-x", "sub": False, "hidden": True, "project": "",
+                           "meta": {"titles": ["Not to be shown"], "ctitles": []}}}}))
+
+    def periods(self, hide=None):
+        data, _g = build_site.load_cost(self.reports, self.TODAY, self.ledger, hide or self.hide)
+        return data["periods"]
+
+    def test_each_period_lists_its_own_days(self):
+        p = self.periods()
+        got = dict((k, [(s["id"], s["usd"]) for s in p[k]["sessions"]]) for k in p)
+        self.assertEqual(got["today"], [("eeee0005", 1.0), ("iiii0009", 0.0)])   # no tokens: $0, not "no price"
+        self.assertEqual(got["week"], [("cccc0003", 6.0), ("dddd0004", 2.0), ("eeee0005", 1.0),
+                                       ("iiii0009", 0.0)])
+        self.assertEqual(got["month"], [("cccc0003", 11.0), ("bbbb0002", 10.0), ("dddd0004", 2.0),
+                                        ("eeee0005", 1.0), ("iiii0009", 0.0)])
+        # All time reaches back past the first digest (Nov 16) to the ledger's first day
+        self.assertEqual(got["all"], [("aaaa0001", 20.0), ("cccc0003", 11.0), ("bbbb0002", 10.0),
+                                      ("dddd0004", 2.0), ("eeee0005", 1.0), ("iiii0009", 0.0)])
+        self.assertEqual(p["all"]["sessions"][0]["day"], "2026-08-29")
+        self.assertEqual(p["all"]["sessions"][0]["when"], "Aug 29")
+        self.assertEqual(p["today"]["sessions"][1]["kind"], "scheduled")
+        self.assertEqual([p[k]["session_count"] for k in ("today", "week", "month", "all")], [2, 4, 5, 6])
+
+    def test_a_hidden_flag_from_older_cache_settings_hides_no_row(self):
+        path = os.path.join(self.home, "live-cache.json")
+        with open(path) as fh:
+            cache = json.load(fh)
+        cache["sig"] = "0123456789abcdef"                     # a rule since removed
+        write(path, json.dumps(cache))
+        rows = dict((s["id"], s["title"]) for s in self.periods()["all"]["sessions"])
+        self.assertEqual(rows.get("hhhh0008"), "")             # listed again, still without that title
+
+    def test_a_ledger_written_under_other_settings_lists_no_session(self):
+        self.led["exclude_sig"] = "0123456789abcdef"          # e.g. before only_account changed
+        write(self.ledger, json.dumps(self.led))
+        p = self.periods()
+        self.assertEqual([(p[k]["sessions"], p[k]["session_count"]) for k in p], [([], 0)] * 4)
+
+    def test_a_session_over_several_days_is_one_row(self):
+        month = self.periods()["month"]["sessions"]
+        rows = [s for s in month if s["id"] == "cccc0003"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["usd"], rows[0]["sub_usd"], rows[0]["day"], rows[0]["project"], rows[0]["kind"]),
+                         (11.0, 1.0, "2026-11-12", "gamma", "interactive"))
+
+    def test_left_out_and_other_account_work_never_shows(self):
+        p = self.periods()
+        blob = json.dumps(p)
+        for gone in ("ffff0006", "gggg0007", "hhhh0008", "zzzz9999", "secret", "Other account job",
+                     "Not to be shown"):
+            self.assertNotIn(gone, blob, gone)
+        self.assertTrue(all(s["id"] != "gggg0007" for k in p for s in p[k]["sessions"]))
+
+    def test_titles_from_old_digests_the_cache_or_the_id(self):
+        titles = dict((s["id"], s["title"]) for s in self.periods()["all"]["sessions"])
+        self.assertEqual(titles, {"dddd0004": "Delta work",      # a digest under older account rules
+                                  "bbbb0002": "Beta custom",     # the live cache's custom title
+                                  "cccc0003": "", "aaaa0001": "", "eeee0005": "",
+                                  "iiii0009": ""})
+        # a digest's title wins over the cache's
+        write(os.path.join(self.reports, "digests", "daily-2026-11-01.json"), json.dumps({
+            "sessions": [{"id": "bbbb0002-x", "title": "Beta from the digest"}]}))
+        titles = dict((s["id"], s["title"]) for s in self.periods()["all"]["sessions"])
+        self.assertEqual(titles["bbbb0002"], "Beta from the digest")
+
+
 if __name__ == "__main__":
     unittest.main()
