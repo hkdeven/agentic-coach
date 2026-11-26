@@ -80,7 +80,7 @@ The reports are written to the same folder either way.
 
 After every recap the plugin rebuilds one page from your reports:
 
-- 🧭 **Overview:** cost, calls, sessions and tokens for Today, 7 days, 30 days or All time, with a spend graph, first-try edits, cache hit rate, corrections, spend by activity, by model (with each model's errors and rework), projects, MCP servers, the sessions running now and your plan limits. See [What the Overview shows](LIVE-FEED.md#what-the-overview-shows).
+- 🧭 **Overview:** cost, calls, sessions and tokens for Today, 7 days, 30 days or All time, with a spend graph, first-try edits, cache hit rate, corrections, spend by activity, by model (with each model's errors and rework), Claude's time estimates against the actual time by model, projects, MCP servers, the sessions running now and your plan limits. See [What the Overview shows](LIVE-FEED.md#what-the-overview-shows).
 - ☀️ **Today:** the latest daily items, each with its evidence, the session facts and detector findings behind it, and the one thing to do today.
 - 📆 **This week:** the latest weekly review, with each proposed change ready to copy.
 - 💵 **Cost:** what your tokens would cost at API list prices for Today, 7 days, 30 days or All time: the totals, a split by model, project or main session against subagents, a cost graph, the top sessions and the cost by token type. See [Cost](#cost).
@@ -108,7 +108,7 @@ Every recap also shows what your tokens would cost, in US dollars, with totals b
 Where you see it:
 
 - 🧾 **In each recap item:** an item that quotes tokens quotes the cost in the same line, for example `3.0M output tokens, about $45`.
-- 🧮 **At the end of the daily report:** one `Totals:` line with the day's tokens and cost, the top three projects, the week to date and the all-time figure.
+- 🧮 **At the end of the daily report:** one `Totals:` line with the day's tokens and cost, the top three projects, the week to date and the all-time figure. When Claude stated time estimates that day, an `Estimates:` line follows it (the weekly has it under "Week in numbers"): per model, the pieces of work with a stated actual, the minutes estimated and taken, and how far over or under. The rules are in [LIVE-FEED.md](LIVE-FEED.md#field-rules), under `estimates`.
 - 📊 **In the weekly report:** a "Cost by project" table with a column for the week and a column for all time.
 - 🖥️ **On the coach page, under Cost.** The tab follows the same four periods as the Overview: Today, 7 days, 30 days and All time. For the chosen period it shows:
   - **The totals:** cost, tokens, output tokens and the number of days with data. Tokens whose model has no list price are named as unpriced.

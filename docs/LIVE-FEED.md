@@ -18,6 +18,7 @@ The Overview is the first tab of the coach page once there is data for it. It ha
 | First try | The share of edit turns with no retry. A retry is the same file edited again with a shell command in between (Edit foo, Bash, Edit foo). A different file after the shell command is not a retry, and neither is a shell command that only reads, such as grep or git log. |
 | By activity | Every turn is filed under one of 13 types (listed under `activities` below). Every type with spend is listed, highest cost first, with its turns and its first-try rate. A subagent's work is filed under what the agent did. |
 | By model | The four models that cost the most, each with its cost and share of spend, its first-try rate, its failed tool calls and their share of its tool calls, and its rework (edits it had to redo, plus times you corrected it). Errors and rework are counted on the model that made the call. The error figure turns amber from 2 percent of tool calls and red from 4 percent. A row opens "Where the errors were": the tools and MCP servers behind that model's errors, redone edits and corrections. Smaller models fold into one line, and one line names the model with the most rework. |
+| Estimates by model | Claude's time estimates against the actual time it reported, one row per model, sorted by model: pieces of work, minutes estimated, minutes taken and how far over or under. A piece counts only when Claude stated its actual ("estimate 15 min, actual 11"); an estimate with no stated actual is counted apart, under the table, and left out of the totals. Hidden when the period has none. |
 | Projects | The top three by cost, the rest as Other. |
 | MCP servers | Calls, different tools used and failed calls per server, most calls first, up to 8, with readable names. |
 | Before | The same figures for the period just before: yesterday, the 7 days before, the 30 days before. All time has none. |
@@ -101,7 +102,12 @@ All numbers below are samples.
                    {"name": "Edit", "kind": "tool", "errors": 2, "redone_edits": 10, "corrections": 0},
                    {"name": "Claude browser", "kind": "mcp", "errors": 5, "redone_edits": 0, "corrections": 0},
                    {"name": "No tool", "kind": "none", "errors": 0, "redone_edits": 0, "corrections": 1}]}
-      ]
+      ],
+      "estimates": {
+        "rows": [{"model": "claude-fable-5-2", "name": "Claude Fable 5.2", "pieces": 4,
+                  "est_min": 50, "act_min": 65, "overrun_pct": 30, "no_actual": 2}],
+        "pieces": 4, "est_min": 50, "act_min": 65, "overrun_pct": 30, "no_actual": 2
+      }
     },
     "week": {"label": "Last 7 days", "series_unit": "day", "...": "the same keys as today"},
     "month": {"label": "Last 30 days", "series_unit": "day", "...": "the same keys as today"},
@@ -162,6 +168,13 @@ Each period (`today`, `week`, `month`, `all`):
   - `where`: up to 6 rows, the tools where this model's errors, redone edits and corrections happened, most errors first (then most redone edits, then most corrections, then by name). `kind` is `tool` for a built-in tool (named by its tool name), `mcp` for an MCP server (named as in `mcp_servers`), and `none` for the row "No tool". An error sits on the tool that failed, a redone edit on the edit tool that made the retry, and a correction on the last tool call of the answer it corrects, or "No tool" when that answer made none. A tool with nothing to report has no row.
   - Cost per model covers every day, ledger days included (the ledger keeps the main and subagent split per model). Every other figure exists only where the transcript was read, as for activities.
   - Exclusions and the account filter apply as everywhere else, and no prompt text is in the rows.
+- `estimates`: Claude's stated time estimates against the actual time it reported (`coach/estimates.py`), or null when the period has none. The rules:
+  - Claude states an estimate before a piece of work ("Estimate: 15 minutes", "Estimate 25 min.") and reports it when the work is done ("estimate 15 min, actual 11", "Estimate 20, actual 6."). Only main-session transcripts are read; hours become minutes; a range ("20 to 30 minutes") is not read.
+  - A report is paired with the latest open estimate of the same minutes earlier in the same transcript, and the piece belongs to the model that made the estimate. A report with no such estimate stands alone and belongs to the model that wrote it. The same report written again within an hour in the same transcript counts once.
+  - A piece counts only when Claude stated its actual, and it is filed on the day of the report. An estimate never followed by a report is counted in `no_actual` (on the day of the estimate) and is in no other figure. The time from the estimate to a later message is not used instead: the transcript does not mark where a piece of work ends, and that gap takes in waiting for checks or for the person, other tasks and nights the session sat open.
+  - `rows`: one per model, sorted by model id (a dated id and its plain id are one row). `model` is the id, `name` the display name, `pieces` the pieces with a stated actual, `est_min` and `act_min` their minutes, `overrun_pct` (actual - estimated) / estimated as a whole percent (positive is over, negative under, null with no pieces) and `no_actual` that model's estimates with no stated actual. A model with only open estimates has a row with 0 pieces.
+  - The top-level `pieces`, `est_min`, `act_min`, `overrun_pct` and `no_actual` are the same figures for all models together.
+  - Like the other detail figures, it exists only where the transcript was read.
 
 All time only:
 

@@ -14,7 +14,8 @@ file too; it is plain JSON.
 What is in the feed (version 1): for today, the last 7 days, the last 30
 days and all time: cost, calls, sessions, tokens, a series for a line graph,
 the peak, the first-try edit rate, the cache hit rate, corrections, spend by
-activity, spend by project, MCP servers called, figures per model, and the
+activity, spend by project, MCP servers called, figures per model, Claude's
+time estimates against the actual time by model (estimates.py), and the
 same figures for the period just before (all time has none). Then the plan limits last seen by the
 status line, the sessions running now, and up to three tips from the latest
 findings.
@@ -113,13 +114,15 @@ if HERE not in sys.path:
 
 import activity as A  # noqa: E402
 import common as C  # noqa: E402
+import estimates as ES  # noqa: E402
 import extract as E  # noqa: E402
 import ledger as L  # noqa: E402
 import pricing as P  # noqa: E402
 import scope as SC  # noqa: E402
 
 VERSION = 1
-CACHE_VERSION = 7          # 7: figures per model (tool calls, errors, edits, corrections)
+CACHE_VERSION = 8          # 7: figures per model (tool calls, errors, edits, corrections); 8: estimates
+EST_KEEP = 4000             # estimate events kept per transcript, newest last (far above any seen)
 ALL_DAILY_DAYS = 60         # All time: one point a day up to this many days, then one a week
 ALL_MAX_DAYS = 3660         # All time never reaches further back than ten years (a record with a broken clock)
 RUN_GAP_SEC = 6 * 3600      # a session untouched this long starts a new run when it is used again
@@ -261,7 +264,8 @@ def new_entry(sub=False):
                      "run": None, "last": None, "ended": False},
             "agg": {"h": {}, "calls": {}, "act": {}, "corr": {}, "edits": {}, "mcp": {}, "mod": {}},
             "open": None, "recent": {}, "pend": {}, "rp": {}, "peak": {}, "turn": 0,
-            "ans": None}       # the last answer: [model key, its last tool key or None, turn number]
+            "ans": None,       # the last answer: [model key, its last tool key or None, turn number]
+            "est": []}         # estimates.py events of a main session: [time, model, estimate, actual]
 
 
 def _new_turn(hour, flags):
@@ -482,6 +486,13 @@ class Reader(object):
             owner = self.claimed.get(key)
             if owner is not None and owner != self.path:
                 return                      # a copy of a message another transcript has
+        if not e["sub"] and isinstance(content, list):
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "text":
+                    for ev in ES.events(b.get("text"), d.get("timestamp"), model):
+                        e.setdefault("est", []).append(list(ev))
+            if len(e.get("est") or []) > EST_KEEP:
+                del e["est"][:-EST_KEEP]
         if e["open"] is None:
             e["open"] = _new_turn(hour, list(A.NO_FLAGS))
         turn = e["open"]
@@ -887,6 +898,8 @@ class Totals(object):
         self.peak = {}          # model -> largest context seen
         self.mcost = {}         # day -> {"main": {model key: five counts}, "sub": {...}}
         self.mod = {}           # day -> {model key: _new_mod() figures}
+        self.est = []           # (day, estimates.py piece): the day is the report's
+        self.est_open = []      # (day, open estimate): the day is the estimate's
         self.from_ledger = set()
 
 
@@ -907,6 +920,7 @@ def add_up(cache, scope=None):
     tot = Totals()
     files = cache.get("files") or {}
     other = {}
+    day_of = C.day_lookup()
 
     def out(sid, day):
         """True on a hidden date, or when the coach's account log now says another account."""
@@ -991,6 +1005,13 @@ def add_up(cache, scope=None):
         for model, ctx in (e.get("peak") or {}).items():
             if ctx > tot.peak.get(model, 0):
                 tot.peak[model] = ctx
+        if e.get("est") and not e.get("sub"):
+            pieces, opened = ES.pair(e["est"])
+            for into, rows in ((tot.est, pieces), (tot.est_open, opened)):
+                for r in rows:
+                    day = day_of(r["t"]) if isinstance(r["t"], str) else None
+                    if day is not None and not hidden_day(day):
+                        into.append((day, r))
     return tot
 
 
@@ -1302,7 +1323,19 @@ def period(tot, label, days, prev_days, prices, series, steps=None, detail_days=
         "projects": project_rows(tot, days, prices),
         "mcp_servers": mcp_rows(tot, days),
         "models": model_rows(tot, days, cur["acts"], prices),
+        "estimates": estimate_rows(tot, days, prices),
     }
+
+
+def estimate_rows(tot, days, prices=None):
+    """Claude's estimates against the actual time it reported, per model, for these days
+    (estimates.py), or None when there were none. A piece is filed on the day of its report."""
+    days = set(days)
+    out = ES.block([p for d, p in tot.est if d in days], [o for d, o in tot.est_open if d in days],
+                   prices)
+    if out:
+        out.pop("meaning", None)
+    return out
 
 
 def hour_keys(today, now):

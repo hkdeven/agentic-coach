@@ -28,6 +28,7 @@ The plan printed by `recap.py` names every file and script used below. `FT` stan
    2. ...
 
    Totals: (the plan's totals_line)
+   Estimates: (the plan's estimates_line, only when it is not null)
    Checked: N items against the transcripts.
    ```
 
@@ -35,9 +36,10 @@ The plan printed by `recap.py` names every file and script used below. `FT` stan
    - `What happened:` ends with the item's evidence tag in round brackets, exactly as `evidence.py` gave it (`session 1a2b3c4d, turn 41, 13:39`, or `turns 41 to 47, 13:39 to 14:02`, or `session 1a2b3c4d, evidence no longer on disk`). The tag carries the session id and the time, so do not write them a second time. After the tag, only for a `RECURRING` row, comes its `marker` from step 3, for example `(repeat of 2026-11-10, given 3 times)`. A `NEW` item has no marker.
    - Do not write a per-item `Evidence:` line: the page works out the command to open the evidence from the tag.
    - After the items, one blank line, then the plan's `totals_line`, copied exactly. It starts with the label `Totals:`.
+   - When the plan's `estimates_line` is not null, it comes on the next line, copied exactly. It starts with the label `Estimates:` and gives, per model, the pieces of work with a stated actual, the minutes estimated and taken, and the overrun. When it is null, leave the line out. It is not an item.
    - The last line is `Checked: N items against the transcripts.`, with the merge's `totals_line` added only when something was dropped: `Checked: 4 items against the transcripts, 2 candidates dropped on verification.` Neither line is an item or counts toward the five.
-   - Keep the labels `What happened:`, `Do instead:`, `Totals:` and `Checked:` exactly as written, at the start of their line, with no bold or other markup. The coach page (`coach/build_site.py`) parses these lines.
-   - If nothing is notable after verification, the body is the single line `Nothing notable on YYYY-MM-DD.` (for a range: `Nothing notable from YYYY-MM-DD to YYYY-MM-DD.`), a blank line, the `totals_line`, and the `Checked:` line only if candidates were dropped.
+   - Keep the labels `What happened:`, `Do instead:`, `Totals:`, `Estimates:` and `Checked:` exactly as written, at the start of their line, with no bold or other markup. The coach page (`coach/build_site.py`) parses these lines.
+   - If nothing is notable after verification, the body is the single line `Nothing notable on YYYY-MM-DD.` (for a range: `Nothing notable from YYYY-MM-DD to YYYY-MM-DD.`), a blank line, the `totals_line`, the `estimates_line` when it is not null, and the `Checked:` line only if candidates were dropped.
 
 7. **Record the advice.** Run `FT record --report <the plan's report> --key 1=<key> --key 2=<key>` with the keys kept in step 3, as `followthrough.md` step 4 says. Run it for a "Nothing notable" report too.
 
@@ -47,6 +49,6 @@ The plan printed by `recap.py` names every file and script used below. `FT` stan
 
 10. **Notify, only if the plan's `notify` is true.** One push notification, one line under 200 characters, no markdown: `Coach: N tips ready. Top: ` followed by the first item's Do instead line, shortened to fit. If nothing was notable, send nothing.
 
-11. **Reply with the items only**: the same lines as the report (the `Totals:` and `Checked:` lines included), nothing before or after. Then, when at least one item has a tag on disk, one line: `Evidence: python3 <the real plugin folder>/coach/evidence.py show <session> --turn <turn>` (the numbers are in each item's tag). If `page_url` is set, add that link on its own line last; if it is null, say nothing about the page. If nothing was notable, reply with that one line.
+11. **Reply with the items only**: the same lines as the report (the `Totals:`, `Estimates:` and `Checked:` lines included), nothing before or after. Then, when at least one item has a tag on disk, one line: `Evidence: python3 <the real plugin folder>/coach/evidence.py show <session> --turn <turn>` (the numbers are in each item's tag). If `page_url` is set, add that link on its own line last; if it is null, say nothing about the page. If nothing was notable, reply with that one line.
 
 Steps 3, 5, 7, 8, 9 and 10 are the only actions allowed beyond reading and writing the report. If the person then asks to apply an item ("add that rule for me"), follow `applyfix.md`; never in a run marked `unattended`.
