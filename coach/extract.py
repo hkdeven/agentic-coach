@@ -27,12 +27,14 @@ import time
 
 try:
     from . import common as C
+    from . import estimates as ES
     from . import pricing as P
     from . import projects as PR
     from . import scope as SC
 except ImportError:  # run as a script
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import common as C
+    import estimates as ES
     import pricing as P
     import projects as PR
     import scope as SC
@@ -111,6 +113,7 @@ class SessionAcc(object):
         self.api_retries = 0
         self.hook_blocks = collections.Counter()
         self.skills_listed = set()
+        self.estimates = []         # estimates.py events, main sessions only
         self.sub = None
 
     # ----- time -----
@@ -178,6 +181,10 @@ class SessionAcc(object):
                 self.peak_context = ctx
         if d.get("isApiErrorMessage"):
             self.api_errors += 1
+        if not self.allow_sidechain and not (mid is not None and mid in self._foreign):
+            for b in m.get("content") or []:
+                if isinstance(b, dict) and b.get("type") == "text":
+                    self.estimates.extend(ES.events(b.get("text"), d.get("timestamp"), model))
         for b in m.get("content") or []:
             if not isinstance(b, dict) or b.get("type") != "tool_use":
                 continue
@@ -1008,6 +1015,9 @@ def run(since, until, session=None, project=None, max_bytes=150000,
     totals["cost"] = cost_totals(accs)
     totals["models_tokens"] = merge_models(*[merge_models(a.by_model, (a.sub or {}).get("models_tokens"))
                                              for a, _ in accs])
+    est = ES.summary([a.estimates for a, _ in accs])
+    if est:
+        totals["estimates"] = est
 
     rep = []
     for g in sorted(repeated.values(), key=lambda g: (-len(g["sessions"]), -g["n"])):

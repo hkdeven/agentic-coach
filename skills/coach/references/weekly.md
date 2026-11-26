@@ -35,6 +35,7 @@ The plan printed by `recap.py` names every file and script used below. `FT` stan
    ## Week in numbers
    One or two lines: sessions, prompts, active hours, output tokens and cost, errors, corrections,
    compactions, each with last week's figure beside it when known.
+   Estimates: (the plan's estimates_line, only when it is not null)
    Checked: N items against the transcripts.
 
    ## Cost by project
@@ -63,7 +64,7 @@ The plan printed by `recap.py` names every file and script used below. `FT` stan
    ```
 
    - **Follow-through**: the heading and the lines exactly as `FT weekly` gave them. Each line starts with one status: `worse`, `recurred`, `same`, `better`, `not seen again`, `cannot measure` or `no data`.
-   - **Week in numbers**: give the week's cost beside the tokens (from `totals.cost` in the digest). Its last line is `Checked: N items against the transcripts.`, with `, M candidates dropped on verification` added only when the merge dropped something.
+   - **Week in numbers**: give the week's cost beside the tokens (from `totals.cost` in the digest). When the plan's `estimates_line` is not null, copy it exactly as the line before `Checked:` (it starts with `Estimates:`: per model, the pieces of work with a stated actual, the minutes estimated and taken, and the overrun); when it is null, leave it out. Its last line is `Checked: N items against the transcripts.`, with `, M candidates dropped on verification` added only when the merge dropped something.
    - **Cost by project**: the plan's `cost_block` already starts with its own heading. Paste it once, as it is.
    - **Before and after**: written as `compare.md` "The written comparison" says (first line the two periods with their dates and session counts, then one line per real movement with both numbers, the basis, the percent and the verdict word from `state`). If the file says `too_little_data`, the block is that first line plus the reason, with no percent and no verdict. If the plan has no `compare`, leave the block out.
    - **What cost the most**: each `What happened:` line ends with its evidence tag in round brackets, as in the daily. Every item that quotes tokens quotes the cost in the same line. Start every `Trend:` line with one of the four words new, repeat, better, worse: for a `RECURRING` row use its `trend` from step 3 (`Trend: repeat since 2026-11-10, given 3 times; ...`); when the item has a follow-through row, the two numbers are that row's; say better or worse only where a follow-through row or a compare row (`improvement` or `regression`) says so. If a fix for the pattern was applied and it still happened, say the change did not hold. Do not write a per-item `Evidence:` line.

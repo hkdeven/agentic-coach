@@ -29,6 +29,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import common as C  # noqa: E402
+import estimates as ES  # noqa: E402
 import extract  # noqa: E402
 import ledger as L  # noqa: E402
 import pricing as P  # noqa: E402
@@ -287,6 +288,7 @@ def build(words, today=None, projects_dir=None, root=None, unattended=False):
     fresh = mode == "weekly" or (mode == "daily" and end == (today or datetime.date.today()))
     out["notify"] = bool(cfg["notify"]) and fresh
     t = digest.get("totals") or {}
+    out["estimates_line"] = ES.line(t.get("estimates"))     # None: no estimate in the period
     out["sessions"] = t.get("sessions", 0)
     out["turns"] = t.get("turns", 0)
     out["findings_count"] = len(findings)

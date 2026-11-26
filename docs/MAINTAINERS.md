@@ -22,6 +22,7 @@ coach/setup_check.py   read-only check of schedules, old hooks, old reports, pag
                        live-agent status, install and uninstall for the live feed runner
 coach/live.py          the live feed: the Overview's figures and live.json (docs/LIVE-FEED.md)
 coach/activity.py      files each turn under an activity type, and the first-try edit rule
+coach/estimates.py     Claude's "Estimate" and "estimate X, actual Y" lines: pairing and totals by model
 coach/nudge.py         Stop hook
 coach/permlog.py       PermissionRequest hook: logs the prompt, decides nothing
 coach/common.py        shared helpers and the config reader

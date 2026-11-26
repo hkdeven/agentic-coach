@@ -560,6 +560,7 @@ def parse_items(lines):
 
 _TOTALS_RE = re.compile(r"^\s*(?:[-*]\s+)?Totals:\s*(.*)$")
 _CHECKED_RE = re.compile(r"^\s*(?:[-*]\s+)?Checked:\s*(.*)$")
+_ESTIMATES_RE = re.compile(r"^\s*(?:[-*]\s+)?Estimates:\s*(.*)$")
 
 
 def take_checked(lines):
@@ -592,11 +593,14 @@ def visible_items(items, hide):
 def parse_daily(text, hide=NO_HIDE):
     """Items, the note, the closing `Totals:` line (tokens and cost for the day)
     and the `Checked:` line that may follow it. Excluded work is left out."""
-    lines, totals = [], ""
+    lines, totals, estimates = [], "", ""
     for line in (text or "").split("\n"):
         m = _TOTALS_RE.match(line.replace("**", ""))
+        e = _ESTIMATES_RE.match(line.replace("**", ""))
         if m:
             totals = m.group(1).strip()
+        elif e:
+            estimates = e.group(1).strip()
         else:
             lines.append(line)
     lines, checked = take_checked(lines)
@@ -608,6 +612,7 @@ def parse_daily(text, hide=NO_HIDE):
     return {"items": visible_items(items, hide)[:5],
             "note": "" if hide.text(note) else cut(note, 400),
             "totals": cut(visible_totals(totals, hide), 500),
+            "estimates": "" if hide.text(estimates) else cut(estimates, 600),
             "checked": "" if hide.text(checked) else checked}
 
 
@@ -2599,6 +2604,27 @@ def rework_note(models):
     return {"model": m["name"], "lead": "Most rework: %s." % m["name"], "rest": " ".join(rest)}
 
 
+def live_estimates(v):
+    """The feed's estimates block for the Overview's Estimates by model card, cleaned:
+    the rows sorted by model, each with its heat on the minutes estimated. None when the
+    feed has none (the card is then hidden)."""
+    if not isinstance(v, dict):
+        return None
+    rows = []
+    for r in _rows(v.get("rows"), 30):
+        pieces = _fin(r.get("pieces"))
+        if pieces is None or pieces < 0:
+            continue
+        over = _fin(r.get("overrun_pct"))
+        rows.append({"model": _txt(r.get("model"), 60) or "", "name": _txt(r.get("name"), 60) or "?",
+                     "pieces": pieces, "est_min": _fin(r.get("est_min")), "act_min": _fin(r.get("act_min")),
+                     "overrun_pct": over, "no_actual": _fin(r.get("no_actual")) or 0})
+    rows.sort(key=lambda r: (r["model"], r["name"]))
+    if not rows:
+        return None
+    return {"rows": add_heat(rows, "est_min"), "no_actual": _fin(v.get("no_actual")) or 0}
+
+
 def live_period(p, label, hide=NO_HIDE):
     series = []
     for r in _rows(p.get("series"), LIVE_SERIES_MAX):
@@ -2616,6 +2642,7 @@ def live_period(p, label, hide=NO_HIDE):
     return {
         "models": models, "model_note": rework_note(models),
         "models_more": smaller_models(p.get("models")),
+        "estimates": live_estimates(p.get("estimates")),
         "label": _txt(p.get("label"), 40) or label,
         "detail_from": nice_day(detail) if since and detail and detail[:10] > since[:10] else None,
         "cost_usd": _fin(p.get("cost_usd")), "prev_cost_usd": _fin(p.get("prev_cost_usd")),
@@ -3599,6 +3626,7 @@ td.n, th.n { text-align: right; white-space: nowrap; }
     var st = stats(d.counts);
     if (st) { root.appendChild(st); }
     if (d.totals) { root.appendChild(h("p", { class: "totals-line", text: "Totals: " + d.totals })); }
+    if (d.estimates) { root.appendChild(h("p", { class: "totals-line", text: "Estimates: " + d.estimates })); }
     if (!d.items.length) {
       root.appendChild(emptyBox(d.note || "Nothing notable on this day.", "No items were raised in this recap."));
     } else {
@@ -4249,6 +4277,32 @@ td.n, th.n { text-align: right; white-space: nowrap; }
     if (note) { c.appendChild(h("p", { class: "om-call" }, h("b", { text: note.lead }), note.rest ? h("span", { text: " " + note.rest }) : null)); }
     return c;
   }
+  /* Estimates by model: Claude's stated estimates against the actual time it reported. */
+  var ETIPS = {
+    title: "Claude's time estimates against the actual time it reported when the work was done, by the model that made the estimate.",
+    pieces: "Pieces of work with both an estimate and a stated actual time.",
+    est: "Minutes Claude estimated for those pieces.",
+    act: "Minutes Claude reported they actually took.",
+    over: "How far the actual time was over (or under) the estimate, as a share of the estimate."
+  };
+  function mins(v) { return isNum(v) ? whole(v) + " min" : ""; }
+  function overText(v) { return !isNum(v) ? "" : v === 0 ? "On estimate" : Math.abs(v) + "% " + (v > 0 ? "over" : "under"); }
+  function ovEstimates(p) {
+    var e = p.estimates;
+    if (!e || !e.rows || !e.rows.length) { return null; }
+    var c = withNote(ovTable("ov-est", "Estimates by model", ETIPS.title, "Model",
+      [["Estimated", ETIPS.est], ["Actual", ETIPS.act], ["Over", ETIPS.over], ["Pieces", ETIPS.pieces]], e.rows,
+      function (r) {
+        var none = !r.pieces;
+        return [[none ? "" : mins(r.est_min), "main"], [none ? "" : mins(r.act_min), "mid"],
+          [none ? "No actual" : overText(r.overrun_pct), none ? "dim" : r.overrun_pct > 0 ? "is-warn" : "is-good"],
+          [whole(r.pieces), "dim"]];
+      }, ""), p);
+    if (e.no_actual) {
+      c.appendChild(h("p", { class: "ov-note", text: plural(e.no_actual, "estimate") + " with no stated actual, not counted" }));
+    }
+    return c;
+  }
   function ovTables(p) {
     return h("div", { class: "ov-row3" },
       h("div", { class: "ov-col" }, withNote(ovTable("ov-acts", "By activity", null, "Activity",
@@ -4256,7 +4310,7 @@ td.n, th.n { text-align: right; white-space: nowrap; }
         function (r) {
           return [[num(r.usd, money), "main"], [num(r.turns, whole), "mid"],
             [isNum(r.first_try) ? pct(r.first_try) : "No edits", isNum(r.first_try) ? "mid" : "dim"], [num(r.share, pct), "dim"]];
-        }, "No activity in this period"), p), ovModels(p)),
+        }, "No activity in this period"), p), ovModels(p), ovEstimates(p)),
       h("div", { class: "ov-col" },
         ovTable("ov-projects", "Projects", null, "Project",
           [["Cost", TIPS.cost], ["Sessions", TIPS.sessions], ["Share", TIPS.share]], p.projects,

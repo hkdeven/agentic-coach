@@ -254,8 +254,8 @@ class Counting(Home):
         self.assertEqual(sorted(f), ["limits", "page_url", "periods", "running", "tips", "updated",
                                      "version"])
         self.assertEqual(sorted(f["periods"]), ["all", "month", "today", "week"])
-        keys = ["activities", "cache_hit", "calls", "corrections", "cost_usd", "first_try", "label",
-                "mcp_servers", "models", "peak", "prev_cost_usd", "projects", "series", "series_unit",
+        keys = ["activities", "cache_hit", "calls", "corrections", "cost_usd", "estimates", "first_try",
+                "label", "mcp_servers", "models", "peak", "prev_cost_usd", "projects", "series", "series_unit",
                 "sessions", "tokens"]
         for name, p in f["periods"].items():
             # All time also says where it starts and where its detail starts
