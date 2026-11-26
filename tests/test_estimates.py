@@ -58,7 +58,9 @@ class Reading(unittest.TestCase):
                            ("Estimate 20 minutes, actual about 95.", [(20, 95)]),
                            ("1.1.0 is built, estimate 45, actual 47: coach page", [(45, 47)]),
                            ("Estimate 2 h, actual 150 min", [(120, 150)]),
-                           ("Estimate 1 h, actual 2", [(60, 120)])):        # the actual takes the estimate's unit
+                           ("estimate 2 hours, actual 95", [(120, 95)]),     # a bare actual is minutes
+                           ("Estimate 15 min (actual 11)", [(15, 11)]),
+                           ("Estimate 20 min. Actual 35 min.", [(20, 35)])):
             self.assertEqual(ES.find(text), want, text)
 
     def test_a_report_is_not_also_an_estimate(self):

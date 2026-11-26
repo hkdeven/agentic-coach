@@ -22,7 +22,8 @@ The rules:
   the person, other tasks in the same session, and nights the session sat open.
 - Overrun is (actual - estimated) / estimated over the model's totals, so a
   positive figure is over the estimate and a negative one under it.
-- Hours are turned into minutes. A range ("20 to 30 minutes") is not read.
+- Hours are turned into minutes; an actual with no unit is in minutes. A
+  range ("20 to 30 minutes") and a mixed figure ("1h 20m") are not read whole.
 - Only main-session transcripts are read; a subagent's own estimates are not
   the ones the person was given.
 
@@ -49,8 +50,9 @@ _DATED_RE = re.compile(r"^(.+?)[-@]\d{8}$")
 _NUM = r"(?:about\s+|around\s+|roughly\s+|~\s*)?(\d+(?:\.\d+)?)"
 _UNIT = r"(minutes?|mins?|m|hours?|hrs?|h)\b"
 # "estimate 15 min, actual 11", "Estimate 20 minutes, actual about 95", "estimate 45, actual 47"
-DONE_RE = re.compile(r"\bestimate\s*[:=]?\s*" + _NUM + r"\s*(?:" + _UNIT + r")?\s*[,;]\s*(?:and\s+)?"
-                     r"actual\s*[:=]?\s*" + _NUM + r"\s*(?:" + _UNIT + r")?", re.I)
+# and "Estimate 15 min (actual 11)", "Estimate 20 min. Actual 35 min."
+DONE_RE = re.compile(r"\bestimate\s*[:=]?\s*" + _NUM + r"\s*(?:" + _UNIT + r")?\s*[,;(.]\s*(?:and\s+)?"
+                     r"actual\b\s*[:=]?\s*" + _NUM + r"\s*(?:" + _UNIT + r")?", re.I)
 # "Estimate: 15 minutes", "Estimate 25 min.", "estimate 40 minutes"
 START_RE = re.compile(r"\bestimate\s*[:=]?\s*" + _NUM + r"\s*" + _UNIT + r"(?!\s*(?:to|-)\s*\d)", re.I)
 
@@ -74,8 +76,8 @@ def find(text):
     taken = []
     for m in DONE_RE.finditer(text):
         est = _minutes(m.group(1), m.group(2))
-        # the actual is in the estimate's unit unless it names its own
-        act = _minutes(m.group(3), m.group(4) or m.group(2))
+        # an actual with no unit is in minutes, as Claude writes it ("estimate 2 hours, actual 95")
+        act = _minutes(m.group(3), m.group(4))
         taken.append((m.start(), m.end()))
         if est is not None and act is not None:
             hits.append((m.start(), est, act))

@@ -122,7 +122,7 @@ import scope as SC  # noqa: E402
 
 VERSION = 1
 CACHE_VERSION = 8          # 7: figures per model (tool calls, errors, edits, corrections); 8: estimates
-EST_KEEP = 400              # estimate events kept per transcript, newest last
+EST_KEEP = 4000             # estimate events kept per transcript, newest last (far above any seen)
 ALL_DAILY_DAYS = 60         # All time: one point a day up to this many days, then one a week
 ALL_MAX_DAYS = 3660         # All time never reaches further back than ten years (a record with a broken clock)
 RUN_GAP_SEC = 6 * 3600      # a session untouched this long starts a new run when it is used again
