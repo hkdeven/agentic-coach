@@ -213,6 +213,27 @@ def _count(n, word):
     return "%d %s%s" % (n, word, "" if n == 1 else "s")
 
 
+def items(block):
+    """The estimates as one entry per model, then the `Not counted:` entry, or None."""
+    if not isinstance(block, dict) or not block.get("rows"):
+        return None
+    out = ["%s: %s, %s min estimated, %s min actual, %s" % (
+        r["name"], _count(r["pieces"], "piece"), r["est_min"], r["act_min"],
+        _overrun_text(r["overrun_pct"])) for r in block["rows"] if r["pieces"]]
+    if not out:
+        out.append("No piece of work with a stated actual")
+    if block.get("no_actual"):
+        out.append("Not counted: %s with no stated actual" % _count(block["no_actual"], "estimate"))
+    return out
+
+
+def lines_block(block):
+    """The report's `Estimates:` block: the label, then one bullet per model and the
+    `Not counted:` bullet. None when there is nothing to say."""
+    got = items(block)
+    return "\n".join(["Estimates:"] + ["- " + x for x in got]) if got else None
+
+
 def line(block):
     """The report's `Estimates:` line, or None when there is nothing to say."""
     if not isinstance(block, dict) or not block.get("rows"):

@@ -93,4 +93,6 @@ for (const p of ["today", "week", "month", "all"]) {
   out.periods[p] = { cls: byId["overview-root"].className, pressed: byId["ov-p-" + p].getAttribute("aria-pressed"), tree: byId["overview-root"].dump(),
     cost: byId["cost-root"] ? byId["cost-root"].dump() : "" };
 }
+out.today = byId["today-root"] ? byId["today-root"].dump() : "";
+out.weekly = byId["week-root"] ? byId["week-root"].dump() : "";
 console.log(JSON.stringify(out));

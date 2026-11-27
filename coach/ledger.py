@@ -660,6 +660,29 @@ def totals_line(per, label="day"):
     return " ".join(parts)
 
 
+def totals_items(per, label="day"):
+    """The totals of a daily or range report, one entry per total, without the label."""
+    d = per["day"]
+    out = ["Tokens: %s (%s output), about %s API-equivalent"
+           % (P.fmt_tok(d["tokens"]), P.fmt_tok(d["out"]), P.fmt_usd(d["usd"]))]
+    top = _top_projects(d["by_project"])
+    if top:
+        out.append("Top projects: %s" % top)
+    if d["unpriced_tokens"]:
+        out.append("Unpriced: %s tokens" % P.fmt_tok(d["unpriced_tokens"]))
+    if label == "day":
+        out.append("Week to date: %s" % P.fmt_usd(per["calweek"]["usd"]))
+    if per.get("since"):
+        out.append("All time since %s: %s" % (per["since"], P.fmt_usd(per["all"]["usd"])))
+    return out
+
+
+def totals_block(per, label="day"):
+    """The `Totals:` block a daily report ends with: the label, then one bullet per total.
+    The page parser reads the label and the bullets under it."""
+    return "\n".join(["Totals:"] + ["- " + x for x in totals_items(per, label)])
+
+
 def cost_block(week, alltime, since, limit=8):
     """The `## Cost by project` block of a weekly report: week and all-time columns.
 

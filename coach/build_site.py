@@ -493,6 +493,72 @@ def find_tag(text):
     return None
 
 
+def as_tag(text):
+    """The text of an `Evidence:` line when it is a bare evidence tag, or None."""
+    text = (text or "").strip().strip("()").strip()
+    if not re.match(r"^session [0-9a-f]{8}\b", text):
+        return None
+    if EV is None or guarded(lambda: EV.parse_tag(text)):
+        return text
+    return None
+
+
+# What a tip shows. The tag, a session id and the cost of the item are not part
+# of the tip: the tag goes on its own `Evidence:` line (since 1.5.1), and a report
+# from before that carried it, and the cost, inside the What happened line.
+_COST_RE = re.compile(r"\$\d")
+_CLOCK_PAREN_RE = re.compile(r"\s*\((?:\d\d-\d\d )?\d{1,2}:\d\d(?: to (?:\d\d-\d\d )?\d{1,2}:\d\d)?\)")
+
+
+def _split_top(text):
+    """[(separator before, clause)] split on ", " and "; " outside round brackets."""
+    out, depth, start, sep = [], 0, 0, ""
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0 and c in ",;" and text[i + 1:i + 2] == " ":
+            out.append((sep, text[start:i]))
+            sep, start = c + " ", i + 2
+            i += 2
+            continue
+        i += 1
+    out.append((sep, text[start:]))
+    return out
+
+
+def _without_cost(text):
+    """text without the clauses that carry a dollar figure, or text when all of them do."""
+    parts = [(sep, c) for sep, c in _split_top(text) if "`" in c or not _COST_RE.search(c)]
+    if not parts:
+        return ""
+    return (parts[0][1] + "".join(sep + c for sep, c in parts[1:])).strip()
+
+
+def tip_text(text):
+    """An item line as the page shows it: no evidence tag, no clock-time brackets
+    that repeat the tag, no cost clause. Text without any of these is unchanged."""
+    if not text:
+        return text
+    out = _TAG_PAREN_RE.sub("", text)
+    out = _CLOCK_PAREN_RE.sub("", out)
+
+    def inner(m):
+        body = _without_cost(m.group(1))
+        return "(%s)" % body if body else ""
+    out = re.sub(r"\(([^()]*)\)", inner, out)
+    end = re.search(r"((?:\s*\([^()]*\))*)\s*$", out)     # the trailing markers stay as they are
+    head, tail = out[:end.start()], end.group(1)
+    head = _without_cost(head.rstrip()) or head
+    out = re.sub(r"\s{2,}", " ", (head.rstrip(" ,;") + tail).strip())
+    out = re.sub(r"\s+([,;])(?=\s|$)", r"\1", out)
+    out = re.sub(r"\s+\.$", ".", out)
+    return out or text
+
+
 def find_marker(what, trend=""):
     """(first date, times given or None) from an item's repeat marker, or (None, None)."""
     m = _MARKER_RE.search(what or "") or _TREND_MARKER_RE.search(trend or "")
@@ -545,8 +611,12 @@ def parse_items(lines):
         else:
             notes.append(line.strip())
     for it in items:
-        it["ids"] = find_ids(it["what"] + " " + it["do"])[:6]
-        it["tag"] = find_tag(it["what"])
+        # `Evidence:` holds the tag (since 1.5.1) or, in older reports, the command
+        line_tag = as_tag(it["evidence_cmd"])
+        if line_tag:
+            it["evidence_cmd"] = ""
+        it["tag"] = line_tag or find_tag(it["what"])
+        it["ids"] = find_ids(it["what"] + " " + it["do"] + " " + (it["tag"] or ""))[:6]
         it["repeat_since"], it["times"] = find_marker(it["what"], it["trend"])
         it["evidence_cmd"] = cut(it["evidence_cmd"], 300) or None
         it["repeat"] = bool(_REPEAT_RE.search(it["what"]) or _REPEAT_RE.search(it["do"]))
@@ -587,32 +657,118 @@ def visible_items(items, hide):
     if not hide.on:
         return items
     return renumber(items, [it for it in items if not hide.text(
-        it["what"], it["do"], it["trend"], it.get("evidence_cmd"))])
+        it["what"], it["do"], it["trend"], it.get("evidence_cmd"), it.get("tag"))])
+
+
+def shown_items(items):
+    """The items with the tag and the cost taken out of the text the tip shows.
+    Called after visible_items, which judges the text as the report wrote it."""
+    for it in items:
+        for k in ("what", "trend"):          # Do instead may quote a command with $1 in it
+            it[k] = tip_text(it[k])
+    return items
+
+
+_BLOCK_BULLET_RE = re.compile(r"^\s*[-*]\s+(.*)$")
+
+
+def take_labeled(lines, label_re):
+    """(the other lines, the text after the label or None, the bullets under it).
+
+    The label line is `Totals: ...` (one paragraph, before 1.5.1) or `Totals:` with
+    one `- ` bullet per total on the lines right under it (since 1.5.1)."""
+    rest, head, bullets, inside = [], None, [], False
+    for line in lines:
+        clean = line.replace("**", "")
+        if inside:
+            b = _BLOCK_BULLET_RE.match(clean)
+            if b and not label_re.match(clean):
+                bullets.append(b.group(1).strip())
+                continue
+            inside = False
+        m = label_re.match(clean)
+        if m and head is None:
+            head, inside = m.group(1).strip(), True
+            continue
+        rest.append(line)
+    return rest, head, bullets
+
+
+def _no_stop(x):
+    return x.strip().rstrip(".").strip()
+
+
+def totals_list(head, bullets):
+    """The totals as a list, one entry per total, from either form of the block."""
+    if bullets:
+        return [_no_stop(x) for x in ([head] if head else []) + bullets if _no_stop(x)]
+    out = [_no_stop(x) for x in re.split(r"(?<=\.)\s+(?=[A-Z])", head or "") if _no_stop(x)]
+    if out:
+        out[0] = re.sub(r"^(\S+) tokens \(", r"Tokens: \1 (", out[0])
+    return out
+
+
+def estimates_list(head, bullets):
+    """The estimates as a list, one entry per model and the `Not counted:` entry."""
+    if bullets:
+        return [_no_stop(x) for x in ([head] if head else []) + bullets if _no_stop(x)]
+    text, extra = head or "", []
+    m = re.search(r"\s*\bNot counted:.*$", text)
+    if m:
+        text, extra = text[:m.start()], [_no_stop(m.group(0))]
+    return [_no_stop(x) for x in text.split("; ") if _no_stop(x)] + extra
+
+
+def visible_totals_list(items, hide):
+    """The totals list without an excluded project. Only an entry of the `Top projects:`
+    list can be cut cleanly; a hidden name anywhere else leaves the whole list out."""
+    if not items or not hide.text(*items):
+        return items
+    out = []
+    for x in items:
+        if not hide.text(x):
+            out.append(x)
+            continue
+        m = re.match(r"^(Top projects:)\s*(.*)$", x)
+        clauses = m.group(2).split(", ") if m else []
+        if not clauses or not all(_USD_CLAUSE_RE.match(c) for c in clauses):
+            return []
+        keep = [c for c in clauses if not hide.text(c)]
+        if keep:
+            out.append("%s %s" % (m.group(1), ", ".join(keep)))
+    return [] if out and hide.text(*out) else out
 
 
 def parse_daily(text, hide=NO_HIDE):
-    """Items, the note, the closing `Totals:` line (tokens and cost for the day)
-    and the `Checked:` line that may follow it. Excluded work is left out."""
-    lines, totals, estimates = [], "", ""
-    for line in (text or "").split("\n"):
-        m = _TOTALS_RE.match(line.replace("**", ""))
-        e = _ESTIMATES_RE.match(line.replace("**", ""))
-        if m:
-            totals = m.group(1).strip()
-        elif e:
-            estimates = e.group(1).strip()
-        else:
-            lines.append(line)
+    """Items, the note, the closing `Totals:` block (tokens and cost for the day),
+    the `Estimates:` block and the `Checked:` line. Excluded work is left out.
+    Each block is read in the one-paragraph form (before 1.5.1) and the list form."""
+    lines = (text or "").split("\n")
+    lines, t_head, t_bul = take_labeled(lines, _TOTALS_RE)
+    lines, e_head, e_bul = take_labeled(lines, _ESTIMATES_RE)
     lines, checked = take_checked(lines)
     items, note = parse_items(lines)
+    t_list = [cut(x, 300) for x in totals_list(t_head, t_bul)][:8]
+    e_list = [cut(x, 300) for x in estimates_list(e_head, e_bul)][:8]
     if hide.on and hide.text(text or ""):
         # A report that names excluded work was written with that work in its
         # totals. A total it is part of is not shown, with or without the name.
-        totals = ""
-    return {"items": visible_items(items, hide)[:5],
+        t_list, t_head = [], ""
+    if t_bul:
+        t_list = visible_totals_list(t_list, hide)
+        totals = cut(" ".join(x + "." for x in t_list), 500)
+    else:
+        totals = cut(visible_totals(t_head or "", hide), 500)
+        t_list = totals_list(totals, [])
+    if e_list and hide.text(*e_list):
+        e_list = []
+    estimates = cut(" ".join(x + "." for x in e_list) if e_bul else (e_head or ""), 600)
+    return {"items": shown_items(visible_items(items, hide)[:5]),
             "note": "" if hide.text(note) else cut(note, 400),
-            "totals": cut(visible_totals(totals, hide), 500),
-            "estimates": "" if hide.text(estimates) else cut(estimates, 600),
+            "totals": totals,
+            "totals_list": t_list,
+            "estimates": "" if hide.text(estimates) else estimates,
+            "estimates_list": e_list,
             "checked": "" if hide.text(checked) else checked}
 
 
@@ -768,7 +924,19 @@ def parse_weekly(text, hide=NO_HIDE):
         return []
 
     number_lines, checked = take_checked(pick("week in numbers"))
-    numbers = " ".join(x.strip() for x in number_lines if x.strip())
+    number_lines, e_head, e_bul = take_labeled(number_lines, _ESTIMATES_RE)
+    e_list = [cut(x, 300) for x in estimates_list(e_head, e_bul)][:8]
+    if e_list and hide.text(*e_list):
+        e_list = []
+    if e_head is not None and not e_bul:
+        # before 1.5.1 the Estimates line was one more line of the paragraph
+        number_lines.append("Estimates: " + e_head)
+        e_list = []
+    number_lines = [x.replace("**", "") for x in number_lines if x.strip()]
+    as_list = any(_BLOCK_BULLET_RE.match(x) for x in number_lines)
+    numbers_list = [cut(_BLOCK_BULLET_RE.sub(r"\1", x).strip(), 400) for x in number_lines] \
+        if as_list else []
+    numbers = " ".join(x.strip() for x in number_lines)
     cost_lines, late = take_checked(pick("what cost"))
     checked = checked or late
     items, _note = parse_items(cost_lines)
@@ -777,10 +945,15 @@ def parse_weekly(text, hide=NO_HIDE):
                      for x in pick("before and after") if x.strip()][:6]
     unused = parse_unused(pick("set up but unused"))
     if hide.on and hide.text(text or ""):
-        numbers = ""       # written with excluded work in its figures: not shown
+        numbers, numbers_list = "", []       # written with excluded work in its figures: not shown
+    proposals = [p for p in parse_proposals(pick("proposed")) if not hide.deep(p)]
+    for p in proposals:
+        p["why"] = tip_text(p["why"])
     week = {"numbers": cut(visible_sentences(numbers, hide), 900),
-            "items": visible_items(items, hide)[:5],
-            "proposals": [p for p in parse_proposals(pick("proposed")) if not hide.deep(p)],
+            "numbers_list": [x for x in (visible_sentences(y, hide) for y in numbers_list) if x][:10],
+            "estimates_list": e_list,
+            "items": shown_items(visible_items(items, hide)[:5]),
+            "proposals": proposals,
             "note": "" if hide.text(note) else cut(note, 400),
             "cost": parse_cost_block(pick("cost by project"), hide),
             "checked": "" if hide.text(checked) else checked,
@@ -2387,7 +2560,7 @@ def attach_item_evidence(dailies, weeklies, projects_dir, hide=NO_HIDE):
         for it in entry["items"]:
             if not it.get("tag"):
                 continue
-            blk = guarded(lambda: EV.page_block(it["what"], projects_dir, on_page=None, stem=stem))
+            blk = guarded(lambda: EV.page_block(it["tag"], projects_dir, on_page=None, stem=stem))
             if not isinstance(blk, dict) or hide.text(str(blk.get("tag") or "")):
                 continue
             ev = {"tag": cut(str(blk.get("tag") or it["tag"]), 200),
@@ -3114,6 +3287,8 @@ td.n, th.n { text-align: right; white-space: nowrap; }
 .panel-t table tr:last-child td { border-bottom: 0; }
 .panel-t td { vertical-align: middle; }
 .totals-line { color: var(--ink-2); font-size: 14px; max-width: 80ch; }
+.totals-block > .totals-line { margin-bottom: 4px; }
+.totals-list { color: var(--ink-2); font-size: 14px; max-width: 80ch; margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 2px; }
 /* Cost tab, as its approved mockup: the summary row and the split card, the cost graph
    (a stem and a dot a point), then Top sessions beside By token type. */
 .sw1 { color: var(--s1); } .sw2 { color: var(--s2); } .sw3 { color: var(--s3); } .sw4 { color: var(--s4); } .sw0 { color: var(--s0); }
@@ -3565,10 +3740,18 @@ td.n, th.n { text-align: right; white-space: nowrap; }
       box.appendChild(fs.length ? findingList(fs, false) : h("div", { class: "muted", text: "No detector findings for this session." }));
       body.appendChild(box);
     });
-    var parts = [];
-    if (ev) { parts.push(ev.tag); }
-    if (ids.length) { parts.push(plural(ids.length, "session") + ", " + plural(n, "detector finding")); }
-    return h("details", { class: "evidence" }, h("summary", { text: "Evidence: " + parts.join("; ") }), body);
+    /* the tag and the session ids stay inside the fold, never in the tip itself */
+    var sum = ids.length ? ": " + plural(ids.length, "session") + ", " + plural(n, "detector finding") : "";
+    return h("details", { class: "evidence" }, h("summary", { text: "Evidence" + sum }), body);
+  }
+  /* Totals and Estimates: the label, then one bullet per total. */
+  function totalsBlock(label, list, text) {
+    if (list && list.length) {
+      var ul = h("ul", { class: "totals-list" });
+      list.forEach(function (x) { ul.appendChild(h("li", { text: x })); });
+      return h("div", { class: "totals-block" }, h("p", { class: "totals-line", text: label + ":" }), ul);
+    }
+    return text ? h("p", { class: "totals-line", text: label + ": " + text }) : null;
   }
   function itemList(d, items, weekly) {
     var ol = h("ol", { class: "items panel" });
@@ -3625,8 +3808,8 @@ td.n, th.n { text-align: right; white-space: nowrap; }
     }
     var st = stats(d.counts);
     if (st) { root.appendChild(st); }
-    if (d.totals) { root.appendChild(h("p", { class: "totals-line", text: "Totals: " + d.totals })); }
-    if (d.estimates) { root.appendChild(h("p", { class: "totals-line", text: "Estimates: " + d.estimates })); }
+    var tb = totalsBlock("Totals", d.totals_list, d.totals); if (tb) { root.appendChild(tb); }
+    var eb = totalsBlock("Estimates", d.estimates_list, d.estimates); if (eb) { root.appendChild(eb); }
     if (!d.items.length) {
       root.appendChild(emptyBox(d.note || "Nothing notable on this day.", "No items were raised in this recap."));
     } else {
@@ -3691,7 +3874,12 @@ td.n, th.n { text-align: right; white-space: nowrap; }
       });
       root.appendChild(ft);
     }
-    if (w.numbers) { root.appendChild(rich(h("p", { class: "lede" }), w.numbers)); }
+    if (w.numbers_list && w.numbers_list.length) {
+      var nl = h("ul", { class: "totals-list" });
+      w.numbers_list.forEach(function (x) { nl.appendChild(rich(h("li"), x)); });
+      root.appendChild(nl);
+    } else if (w.numbers) { root.appendChild(rich(h("p", { class: "lede" }), w.numbers)); }
+    var wb = totalsBlock("Estimates", w.estimates_list, ""); if (wb) { root.appendChild(wb); }
     if (w.cost && w.cost.rows && w.cost.rows.length) {
       root.appendChild(h("h3", { class: "sub", text: "Cost by project" }));
       var ct = h("table"), chead = h("tr");

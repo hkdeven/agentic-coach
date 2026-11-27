@@ -160,6 +160,7 @@ def cost_plan(mode, first, end, digest, projects_dir=None):
         cost["week_to_date_text"] = P.fmt_usd(week_to_date["usd"])
         per = {"day": span, "calweek": week_to_date, "all": alltime, "since": since}
         out["totals_line"] = L.totals_line(per, "day" if mode == "daily" else "range")
+        out["totals_block"] = L.totals_block(per, "day" if mode == "daily" else "range")
     return out
 
 
@@ -289,6 +290,7 @@ def build(words, today=None, projects_dir=None, root=None, unattended=False):
     out["notify"] = bool(cfg["notify"]) and fresh
     t = digest.get("totals") or {}
     out["estimates_line"] = ES.line(t.get("estimates"))     # None: no estimate in the period
+    out["estimates_block"] = ES.lines_block(t.get("estimates"))   # the same, one bullet per model
     out["sessions"] = t.get("sessions", 0)
     out["turns"] = t.get("turns", 0)
     out["findings_count"] = len(findings)

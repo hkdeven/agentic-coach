@@ -107,8 +107,8 @@ Every recap also shows what your tokens would cost, in US dollars, with totals b
 
 Where you see it:
 
-- 🧾 **In each recap item:** an item that quotes tokens quotes the cost in the same line, for example `3.0M output tokens, about $45`.
-- 🧮 **At the end of the daily report:** one `Totals:` line with the day's tokens and cost, the top three projects, the week to date and the all-time figure. When Claude stated time estimates that day, an `Estimates:` line follows it (the weekly has it under "Week in numbers"): per model, the pieces of work with a stated actual, the minutes estimated and taken, and how far over or under. The rules are in [LIVE-FEED.md](LIVE-FEED.md#field-rules), under `estimates`.
+- 🧾 **Not in the tips.** The items are still ranked by what they cost, but a tip shows no dollar figure: the money is in the totals.
+- 🧮 **At the end of the daily report:** a `Totals:` list, one bullet each for the day's tokens and cost, the top three projects, the week to date and the all-time figure. When Claude stated time estimates that day, an `Estimates:` list follows it (the weekly has it under "Week in numbers", which is a list too): one bullet per model with the pieces of work with a stated actual, the minutes estimated and taken, and how far over or under, then a `Not counted:` bullet. The rules are in [LIVE-FEED.md](LIVE-FEED.md#field-rules), under `estimates`.
 - 📊 **In the weekly report:** a "Cost by project" table with a column for the week and a column for all time.
 - 🖥️ **On the coach page, under Cost.** The tab follows the same four periods as the Overview: Today, 7 days, 30 days and All time. For the chosen period it shows:
   - **The totals:** cost, tokens, output tokens and the number of days with data. Tokens whose model has no list price are named as unpriced.
@@ -153,9 +153,9 @@ The log is `~/.claude/coach/advice.jsonl`. Changes that were applied are noted i
 
 Every item points at the exact place it came from and is checked against that place before you see it.
 
-- 🏷️ Each item ends with a tag such as `(session 1a2b3c4d, turn 41, 13:39)`.
+- 🏷️ Each item in the report file carries a tag such as `Evidence: session 1a2b3c4d, turn 41, 13:39` on its own line. The tip you read, in the reply and on the page, does not show it; on the page it sits inside the item's folded Evidence block.
 - 🕵️ Before the report is written, each of the top candidates (at most eight) is checked against a short slice of the session: is the thing really there, is the number right, is the cause right, would the advice have helped. An item that fails is dropped. The only trace is the last line of the report: `Checked: 4 items against the transcripts, 2 candidates dropped on verification.`
-- 📂 To read the evidence yourself, run the command the reply gives, for example:
+- 📂 To read the evidence yourself, copy the command from the item's Evidence block on the coach page, for example:
 
   ```
   python3 <plugin>/coach/evidence.py show 1a2b3c4d --turn 41

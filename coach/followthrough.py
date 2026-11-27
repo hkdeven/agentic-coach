@@ -71,7 +71,7 @@ _SECTION_RE = re.compile(r"^##\s+(.*)$")
 _PROP_RE = re.compile(r"^###\s+(P\d+)\s*[:.]?\s*(.*)$")
 _PREF_RE = re.compile(r"\bP(\d+)\b")
 # lines after an item that are not part of it
-_TAIL_RE = re.compile(r"^\s*(?:[-*]\s+)?(Totals|Checked|Evidence):")
+_TAIL_RE = re.compile(r"^\s*(?:[-*]\s+)?(Totals|Estimates|Checked|Evidence):")
 _KNOWN_SECTION_RE = re.compile(
     r"^##\s+(follow-through|week in numbers|what cost|proposed|cost by project)", re.I)
 
@@ -305,9 +305,12 @@ def parse_items(lines):
         line = raw.replace("**", "")
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        if _TAIL_RE.match(line):
-            if _TAIL_RE.match(line).group(1) != "Evidence":
+        tail = _TAIL_RE.match(line)
+        if tail:
+            if tail.group(1) != "Evidence":
                 cur = None                    # Totals: and Checked: end the items
+            elif cur is not None:             # the tag (since 1.5.1) names the session
+                cur["evidence"] = (cur["evidence"] + " " + line[tail.end():].strip()).strip()
             field = None if cur is None else "skip"
             continue
         m = _FIELD_RE.match(line)
@@ -317,14 +320,15 @@ def parse_items(lines):
             continue
         m = _ITEM_RE.match(line)
         if m:
-            cur = {"n": int(m.group(1)), "what": m.group(2).strip(), "do": "", "trend": ""}
+            cur = {"n": int(m.group(1)), "what": m.group(2).strip(), "do": "", "trend": "",
+                   "evidence": ""}
             items.append(cur)
             field = "what"
             continue
         if cur is not None and field != "skip":
             cur[field] = (cur[field] + " " + line.strip()).strip()
     for it in items:
-        it["ids"] = find_ids(it["what"] + " " + it["do"])[:8]
+        it["ids"] = find_ids(it["what"] + " " + it["do"] + " " + it.pop("evidence"))[:8]
         it["marker"] = parse_marker(it["what"], it["trend"])
         it["proposals"] = sorted(set("P" + n for n in _PREF_RE.findall(it["do"])),
                                  key=lambda p: int(p[1:]))

@@ -24,7 +24,7 @@ The coach keeps a log of every item it gives (`~/.claude/coach/advice.jsonl`) an
 
 3. Mark a repeat exactly as the row says:
 
-   - Daily or range: end the `What happened:` line with the row's `marker`, for example `(repeat of 2026-11-10, given 3 times)`. It comes after the item's evidence tag (see `daily.md` for the full line). The date is the day the advice was first given; the count includes this report. This extends the older `(repeat of 2026-11-10)` form, which is still read.
+   - Daily or range: end the `What happened:` line with the row's `marker`, for example `(repeat of 2026-11-10, given 3 times)`. The evidence tag is not on that line: it goes on the item's own `Evidence:` line (see `daily.md` for the full item). The date is the day the advice was first given; the count includes this report. This extends the older `(repeat of 2026-11-10)` form, which is still read.
    - Weekly: start the `Trend:` line with the row's `trend`, for example `Trend: repeat since 2026-11-10, given 3 times; 6 compactions this week, 3 last week.`
    - A `NEW` row gets no marker. In a weekly its `Trend:` line starts with `new`.
 
