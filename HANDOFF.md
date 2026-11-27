@@ -16,5 +16,8 @@ Known limits: older weekly reports that name a session in plain text keep it; ol
 - Kept the evidence tag in the report file on a separate `Evidence:` line instead of deleting it, so the page's evidence fold keeps working.
 - Released as 1.5.1 on a branch only; nothing pushed.
 
+## Released 2026-11-27
+- PR hkdeven/agentic-coach#8 merged (1a8756f); installed plugin updated to 1.5.1. Next scheduled daily and weekly runs use the new format.
+
 ## Waiting for Deven
-- Push `coach-tip-format`, merge to main, and update the installed plugin to 1.5.1. Until then the scheduled daily and weekly runs still use 1.5.0 and keep the old format.
+- Nothing.
