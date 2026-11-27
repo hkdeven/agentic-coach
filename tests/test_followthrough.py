@@ -204,6 +204,21 @@ class ParseTest(Base):
         self.assertEqual([p["id"] for p in wk["proposals"]], ["P1", "P2", "P3"])
         self.assertIn("3 sessions", wk["numbers"])
 
+    def test_session_comes_from_the_evidence_line_and_list_totals_end_the_items(self):
+        text = ("# Coach: 2026-11-05\n\n"
+                "1. What happened: a long break at 318k context (repeat of 2026-11-03, given 3 times)\n"
+                "   Do instead: start a fresh session.\n"
+                "   Evidence: session %s, turns 2 to 3, 13:39 to 14:02\n\n"
+                "Totals:\n- Tokens: 2B (8.5M output), about $1,259 API-equivalent\n- Week to date: $3,729\n"
+                "Estimates:\n- Claude Opus 5.5: 2 pieces, 60 min estimated, 65 min actual, 8%% over\n"
+                "Checked: 1 item against the transcripts.\n" % S1)
+        items = F.parse_report(text, "daily")["items"]
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["ids"], [S1])
+        self.assertEqual(items[0]["do"], "start a fresh session.")
+        self.assertEqual(items[0]["marker"], {"since": "2026-11-03", "times": 3})
+        self.assertNotIn("evidence", items[0])
+
     def test_weekly_items_proposals_and_fences(self):
         got = F.parse_report(WEEKLY % {"day": "2026-11-10", "sid": S1}, "weekly")
         self.assertEqual(len(got["items"]), 2)

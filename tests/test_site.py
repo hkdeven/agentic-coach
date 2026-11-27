@@ -464,6 +464,151 @@ def applied_lines(home):
     return "".join(json.dumps(r) + "\n" for r in rows)
 
 
+LIST_DAILY = """# Coach: 2026-11-26
+
+1. What happened: CRM sync build session was picked up after a 156 minute break while holding about 318k context (repeat of 2026-11-16, given 8 times)
+   Do instead: after a break of more than an hour, start the next task in a fresh session.
+   Evidence: session 1a2b3c4d, turns 2 to 3, 13:39 to 14:02
+2. What happened: an Artifact publish was refused 3 times
+   Do instead: merge onto the live version, then publish once.
+   Evidence: session 0b1c2d3e, evidence no longer on disk
+
+Totals:
+- Tokens: 2B (8.5M output), about $1,259 API-equivalent
+- Top projects: A360 $1,048, quagga $162, ACV $44
+- Week to date: $3,729
+- All time since 2026-08-29: $14,540
+Estimates:
+- Claude Fable 5.2: 71 pieces, 2496 min estimated, 1715 min actual, 31% under
+- Claude Opus 5.5: 26 pieces, 763 min estimated, 623 min actual, 18% under
+- Not counted: 69 estimates with no stated actual
+Checked: 2 items against the transcripts, 3 candidates dropped on verification.
+"""
+
+OLD_INLINE_DAILY = """# Coach: 2026-11-26
+
+1. What happened: CRM sync project build session was picked up after a 156 minute break (15:39 to 18:15) while holding about 318k context; about $40 plus $122 in subagents (session 1a2b3c4d, turns 38 to 39, 15:39 to 18:15) (repeat of 2026-11-16, given 8 times)
+   Do instead: After a break of more than an hour, start the next task in a fresh session.
+2. What happened: In A360, a publish was refused 3 times, the last try resending the same content; session about $31 (session 0b1c2d3e, turns 1 to 12, 14:02 to 19:14)
+   Do instead: merge onto the live version first.
+
+Totals: 2B tokens (8.5M output), about $1,259 API-equivalent. Top projects: A360 $1,048, Other one-offs $162, ACV $44. Week to date: $3,729. All time since 2026-08-29: $14,540.
+Estimates: Claude Fable 5.2: 71 pieces, 2496 min estimated, 1715 min actual, 31% under; Claude Opus 5.5: 26 pieces, 763 min estimated, 623 min actual, 18% under. Not counted: 69 estimates with no stated actual.
+Checked: 2 items against the transcripts, 3 candidates dropped on verification.
+"""
+
+LIST_WEEKLY = """# Coach weekly: 2026-11-26
+
+## Week in numbers
+- Sessions: 53 (last week 20)
+- Output tokens: 21.7M (14.0M), $3,196 (last week $1,765)
+Estimates:
+- Claude Opus 5.5: 26 pieces, 763 min estimated, 623 min actual, 18% under
+Checked: 3 items against the transcripts.
+
+## What cost the most
+1. What happened: ACV subagents called Edit on files they had not read, 41 times on 20 Nov
+   Do instead: brief agents to Read before Edit. (P1)
+   Trend: repeat since 2026-11-20, given 5 times; 0.25 to 0.34 per session, worse.
+   Evidence: session 1a2b3c4d, turn 2, 13:40
+
+## Proposed changes (not applied)
+### P1: Read first
+Why: Edit on unread files failed 41 times (20 Nov, $306 in subagents) and in 9 more sessions.
+Change: `Read a file before editing it.`
+Where: ~/.claude/CLAUDE.md
+"""
+
+
+class TipFormatTest(SiteBase):
+    """Release 1.5.1: no cost or evidence tag in a tip, totals and estimates as lists."""
+
+    def test_list_totals_estimates_and_evidence_line(self):
+        day = build_site.parse_daily(LIST_DAILY)
+        self.assertEqual(day["totals_list"], [
+            "Tokens: 2B (8.5M output), about $1,259 API-equivalent",
+            "Top projects: A360 $1,048, quagga $162, ACV $44",
+            "Week to date: $3,729", "All time since 2026-08-29: $14,540"])
+        self.assertTrue(day["totals"].startswith("Tokens: 2B (8.5M output)"))
+        self.assertEqual(day["estimates_list"], [
+            "Claude Fable 5.2: 71 pieces, 2496 min estimated, 1715 min actual, 31% under",
+            "Claude Opus 5.5: 26 pieces, 763 min estimated, 623 min actual, 18% under",
+            "Not counted: 69 estimates with no stated actual"])
+        self.assertEqual(day["checked"], "2 items against the transcripts, 3 candidates dropped on verification.")
+        one, two = day["items"]
+        self.assertEqual(one["tag"], "session 1a2b3c4d, turns 2 to 3, 13:39 to 14:02")
+        self.assertIsNone(one["evidence_cmd"])                  # a tag, not a command
+        self.assertEqual(one["ids"], ["1a2b3c4d"])
+        self.assertEqual((one["repeat_since"], one["times"]), ("2026-11-16", 8))
+        self.assertEqual(one["what"], "CRM sync build session was picked up after a 156 minute break "
+                                      "while holding about 318k context (repeat of 2026-11-16, given 8 times)")
+        self.assertEqual(two["tag"], "session 0b1c2d3e, evidence no longer on disk")
+        for it in day["items"]:
+            self.assertNotIn("Tokens", it["do"])                # the totals are not glued onto an item
+            self.assertNotIn("Evidence", it["do"])
+        self.assertEqual(day["note"], "")
+
+    def test_old_inline_report_still_reads_and_shows_no_tag_or_cost(self):
+        day = build_site.parse_daily(OLD_INLINE_DAILY)
+        one, two = day["items"]
+        self.assertEqual(one["what"], "CRM sync project build session was picked up after a 156 minute break "
+                                      "while holding about 318k context (repeat of 2026-11-16, given 8 times)")
+        self.assertEqual(one["tag"], "session 1a2b3c4d, turns 38 to 39, 15:39 to 18:15")
+        self.assertEqual((one["repeat_since"], one["times"]), ("2026-11-16", 8))
+        self.assertEqual(two["what"], "In A360, a publish was refused 3 times, the last try resending the same content")
+        self.assertEqual(two["tag"], "session 0b1c2d3e, turns 1 to 12, 14:02 to 19:14")
+        self.assertTrue(day["totals"].startswith("2B tokens (8.5M output)"))
+        self.assertEqual(day["totals_list"], [
+            "Tokens: 2B (8.5M output), about $1,259 API-equivalent",
+            "Top projects: A360 $1,048, Other one-offs $162, ACV $44",
+            "Week to date: $3,729", "All time since 2026-08-29: $14,540"])
+        self.assertEqual(day["estimates_list"][-1], "Not counted: 69 estimates with no stated actual")
+        self.assertEqual(len(day["estimates_list"]), 3)
+        self.assertTrue(day["estimates"].startswith("Claude Fable 5.2: 71 pieces"))
+
+    def test_tip_text_leaves_plain_text_alone(self):
+        for text in ("plain text, no change; ok.", 'hit "No .claude/launch.json found" 6 times',
+                     "a run at 10:05 (repeat of 2026-11-10)", "", None):
+            self.assertEqual(build_site.tip_text(text), text)
+        self.assertEqual(build_site.tip_text("x, 3.0M output tokens, about $45 (session 1a2b3c4d, turn 4, 13:39)"),
+                         "x, 3.0M output tokens")
+        self.assertEqual(build_site.tip_text("41 times (20 Nov, $306 in subagents) and more"),
+                         "41 times (20 Nov) and more")
+        self.assertEqual(build_site.tip_text("ran `awk '{print $1}'`, 9 failures"),
+                         "ran `awk '{print $1}'`, 9 failures")
+
+    def test_hidden_project_in_list_totals(self):
+        hide = build_site.Hide([{"match": ["quagga"]}])
+        items = ["Tokens: 1M (1k output), about $41 API-equivalent", "Top projects: demo $20, quagga $12",
+                 "Week to date: $80"]
+        self.assertEqual(build_site.visible_totals_list(items, hide),
+                         ["Tokens: 1M (1k output), about $41 API-equivalent", "Top projects: demo $20",
+                          "Week to date: $80"])
+        self.assertEqual(build_site.visible_totals_list(["Quagga day: 1M tokens", "Week to date: $80"], hide), [])
+        self.assertEqual(build_site.visible_totals_list(items, build_site.NO_HIDE), items)
+        # a report that names excluded work anywhere shows no totals at all
+        self.assertEqual(build_site.parse_daily(LIST_DAILY, hide)["totals_list"], [])
+
+    def test_weekly_lists_and_why_without_cost(self):
+        week = build_site.parse_weekly(LIST_WEEKLY)
+        self.assertEqual(week["numbers_list"], ["Sessions: 53 (last week 20)",
+                                                "Output tokens: 21.7M (14.0M), $3,196 (last week $1,765)"])
+        self.assertEqual(week["estimates_list"],
+                         ["Claude Opus 5.5: 26 pieces, 763 min estimated, 623 min actual, 18% under"])
+        self.assertEqual(week["checked"], "3 items against the transcripts.")
+        item = week["items"][0]
+        self.assertEqual(item["tag"], "session 1a2b3c4d, turn 2, 13:40")
+        self.assertEqual(item["state"], "repeat")
+        self.assertEqual((item["repeat_since"], item["times"]), ("2026-11-20", 5))
+        self.assertNotIn("1a2b3c4d", item["what"] + item["trend"] + item["do"])
+        self.assertEqual(week["proposals"][0]["why"],
+                         "Edit on unread files failed 41 times (20 Nov) and in 9 more sessions.")
+        # a weekly from before 1.5.1 keeps its paragraph
+        old = build_site.parse_weekly(NEW_WEEKLY)
+        self.assertEqual((old["numbers"], old["numbers_list"], old["estimates_list"]),
+                         ("12 sessions (9 last week), 300 prompts, 14 active hours.", [], []))
+
+
 class NewSectionsTest(SiteBase):
     """Release 1.2.0: new report lines, the module sections and the exclude rules."""
 
@@ -521,7 +666,8 @@ class NewSectionsTest(SiteBase):
         day = build_site.parse_daily(NEW_DAILY)
         one, two, three, four = day["items"]
         self.assertEqual(one["tag"], "session 1a2b3c4d, turn 1, 13:39")
-        self.assertIn("(session 1a2b3c4d, turn 1, 13:39)", one["what"])
+        # the tag is read, and not shown as part of the tip (1.5.1)
+        self.assertEqual(one["what"], "14 one-line edits sent one at a time (repeat of 2026-11-10, given 3 times)")
         self.assertEqual((one["repeat_since"], one["times"]), ("2026-11-10", 3))
         self.assertTrue(one["repeat"])
         self.assertEqual(one["evidence_cmd"], "python3 <plugin>/coach/evidence.py show 1a2b3c4d --turn 1")
@@ -1445,6 +1591,26 @@ class OverviewTest(SiteBase):
                               capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 0, done.stderr[-2000:])
         return json.loads(done.stdout)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed: the page's script is not run")
+    def test_today_and_week_show_tips_without_tag_or_cost_and_totals_as_lists(self):
+        write(os.path.join(self.reports, "daily", "2026-11-16.md"), OLD_INLINE_DAILY)
+        write(os.path.join(self.reports, "daily", "2026-11-17.md"), LIST_DAILY.replace("2026-11-26", "2026-11-17"))
+        write(os.path.join(self.reports, "weekly", "2026-11-17.md"), LIST_WEEKLY)
+        got = self.run_script(self.all_time(), "2026-11-23T11:43:00+02:00")
+        today, week = got["today"], got["weekly"]
+        self.assertIn("ul.totals-list", today)
+        self.assertIn('"Totals:"', today)
+        self.assertIn('"Estimates:"', today)
+        self.assertIn('li "Top projects: A360 $1,048, quagga $162, ACV $44"', today)
+        self.assertIn('li "Not counted: 69 estimates with no stated actual"', today)
+        self.assertIn('"CRM sync build session was picked up after a 156 minute break while holding about '
+                      '318k context (repeat of 2026-11-16, given 8 times)"', today)
+        self.assertNotIn('"Evidence: session', today)            # the fold's summary names no session
+        self.assertIn('summary "Evidence: 1 session, 0 detector findings"', today)
+        self.assertIn("ul.totals-list", week)
+        self.assertIn('li\n      "Sessions: 53 (last week 20)"', week)
+        self.assertIn('"Edit on unread files failed 41 times (20 Nov) and in 9 more sessions."', week)
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed: the page's script is not run")
     def test_the_page_script_draws_every_period(self):

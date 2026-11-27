@@ -259,9 +259,13 @@ class InTheDigest(Home):
         self.assertEqual(out["estimates_line"],
                          "Estimates: Claude Opus 5.5: 2 pieces, 60 min estimated, 65 min actual, 8% over. "
                          "Not counted: 1 estimate with no stated actual.")
+        self.assertEqual(out["estimates_block"],
+                         "Estimates:\n- Claude Opus 5.5: 2 pieces, 60 min estimated, 65 min actual, 8% over\n"
+                         "- Not counted: 1 estimate with no stated actual")
         out = recap.build([YESTERDAY], today=datetime.date(2026, 11, 24), projects_dir=self.projects,
                           root=os.path.join(self.tmp, "reports"))
         self.assertIsNone(out["estimates_line"])
+        self.assertIsNone(out["estimates_block"])
 
     def test_the_live_feed_has_them_per_period(self):
         self.sessions()

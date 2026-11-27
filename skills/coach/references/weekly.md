@@ -20,7 +20,7 @@ The plan printed by `recap.py` names every file and script used below. `FT` stan
 
 5. **Set up but unused.** If the plan's `config_audit` is a file, read its `always_on`, `findings` and `weekly_block` and apply `configaudit.md` ("What the figures mean", "Do not flag these", "The block"). Keep at most five lines. If it is null, leave the block out.
 
-6. **Rank by cost**, most costly first. Skip scheduled-task sessions unless one failed or was wasteful.
+6. **Rank by cost**, most costly first, using the dollar figures in the digest; do not print them on the items. Skip scheduled-task sessions unless one failed or was wasteful.
 
 7. **Verify the top candidates (evidence).** Follow `evidence.md` steps 1 to 5 (the plan's `evidence` command, `EV find` for your own items, at most eight verdicts, merge). From here on the items of "What cost the most" come only from the merge's `items`.
 
@@ -33,9 +33,11 @@ The plan printed by `recap.py` names every file and script used below. `FT` stan
    (the `block` lines from step 3, as given, at most five; left out when the block is empty)
 
    ## Week in numbers
-   One or two lines: sessions, prompts, active hours, output tokens and cost, errors, corrections,
-   compactions, each with last week's figure beside it when known.
-   Estimates: (the plan's estimates_line, only when it is not null)
+   - Sessions: N (last week N)
+   - (one `- ` bullet per figure: prompts, active hours, output tokens and cost, errors,
+     corrections, compactions, each with last week's figure beside it when known)
+   Estimates:
+   - (the plan's estimates_block, copied exactly, only when it is not null)
    Checked: N items against the transcripts.
 
    ## Cost by project
@@ -46,9 +48,10 @@ The plan printed by `recap.py` names every file and script used below. `FT` stan
    (at most six lines from step 4: the two periods, then the real movements, one per line)
 
    ## What cost the most
-   1. What happened: one line with dates and the number (session 1a2b3c4d, turn 41, 13:39)
+   1. What happened: one line with the project, dates and the number
       Do instead: one line.
       Trend: new, repeat, better or worse, with numbers.
+      Evidence: session 1a2b3c4d, turn 41, 13:39
    (at most five, most costly first)
 
    ## Set up but unused
@@ -57,21 +60,21 @@ The plan printed by `recap.py` names every file and script used below. `FT` stan
 
    ## Proposed changes (not applied)
    ### P1: short name
-   Why: the evidence in one line (sessions, dates, counts).
+   Why: the evidence in one line (projects, dates, counts; no session ids, no cost).
    Change: the full text, ready to paste. See the forms below.
    Where: the exact file or place it goes.
    (at most five, highest value first)
    ```
 
    - **Follow-through**: the heading and the lines exactly as `FT weekly` gave them. Each line starts with one status: `worse`, `recurred`, `same`, `better`, `not seen again`, `cannot measure` or `no data`.
-   - **Week in numbers**: give the week's cost beside the tokens (from `totals.cost` in the digest). When the plan's `estimates_line` is not null, copy it exactly as the line before `Checked:` (it starts with `Estimates:`: per model, the pieces of work with a stated actual, the minutes estimated and taken, and the overrun); when it is null, leave it out. Its last line is `Checked: N items against the transcripts.`, with `, M candidates dropped on verification` added only when the merge dropped something.
+   - **Week in numbers**: an unordered list, one `- ` bullet per figure (sessions, prompts, active hours, output tokens and cost, errors, corrections, compactions; a split such as "without scheduled runs" gets its own bullet), never one paragraph. Give the week's cost beside the tokens (from `totals.cost` in the digest); this block and the cost table are the only places a weekly report prints dollar figures. When the plan's `estimates_block` is not null, copy it exactly before `Checked:` (the line `Estimates:`, then one bullet per model with the pieces of work with a stated actual, the minutes estimated and taken, and the overrun, then the `Not counted:` bullet); when it is null, leave it out. The last line is `Checked: N items against the transcripts.`, with `, M candidates dropped on verification` added only when the merge dropped something.
    - **Cost by project**: the plan's `cost_block` already starts with its own heading. Paste it once, as it is.
    - **Before and after**: written as `compare.md` "The written comparison" says (first line the two periods with their dates and session counts, then one line per real movement with both numbers, the basis, the percent and the verdict word from `state`). If the file says `too_little_data`, the block is that first line plus the reason, with no percent and no verdict. If the plan has no `compare`, leave the block out.
-   - **What cost the most**: each `What happened:` line ends with its evidence tag in round brackets, as in the daily. Every item that quotes tokens quotes the cost in the same line. Start every `Trend:` line with one of the four words new, repeat, better, worse: for a `RECURRING` row use its `trend` from step 3 (`Trend: repeat since 2026-11-10, given 3 times; ...`); when the item has a follow-through row, the two numbers are that row's; say better or worse only where a follow-through row or a compare row (`improvement` or `regression`) says so. If a fix for the pattern was applied and it still happened, say the change did not hold. Do not write a per-item `Evidence:` line.
+   - **What cost the most**: as in the daily, the `What happened:`, `Do instead:` and `Trend:` lines carry no session id, no evidence tag and no dollar figure; a token count may stand on its own. Each item ends with an `Evidence:` line holding its bare evidence tag, exactly as `evidence.py` gave it. Start every `Trend:` line with one of the four words new, repeat, better, worse: for a `RECURRING` row use its `trend` from step 3 (`Trend: repeat since 2026-11-10, given 3 times; ...`); when the item has a follow-through row, the two numbers are that row's; say better or worse only where a follow-through row or a compare row (`improvement` or `regression`) says so. If a fix for the pattern was applied and it still happened, say the change did not hold.
    - **Set up but unused**: bullet lines in the shape `configaudit.md` gives, then its one total sentence. Every figure says "about" or "estimate".
    - When a proposal carries out the advice of an item in "What cost the most", end that item's `Do instead:` line with the proposal's id in brackets, for example `(P1)`. That is what ties an applied proposal back to the advice in next week's follow-through.
-   - **Proposed changes**: keep the `### P1: name` form and the labels `Why:`, `Change:`, `Where:` exactly as written. Put the text to paste for `Change:` in a fenced code block on the lines right after it (one sentence on what it does may follow `Change:` on the same line), so the page can offer it for copying.
-   - The coach page (`coach/build_site.py`) parses this file: keep the `##` headings and every label exactly as written, each at the start of its line with no bold around it.
+   - **Proposed changes**: keep the `### P1: name` form and the labels `Why:`, `Change:`, `Where:` exactly as written. `Why:` names projects, dates and counts, never a session id or a dollar figure. Put the text to paste for `Change:` in a fenced code block on the lines right after it (one sentence on what it does may follow `Change:` on the same line), so the page can offer it for copying.
+   - The coach page (`coach/build_site.py`) parses this file: keep the `##` headings and every label (`What happened:`, `Do instead:`, `Trend:`, `Evidence:`, `Estimates:`, `Checked:`) exactly as written, each at the start of its line with no bold around it.
 
    Write every proposal out in full so that a yes is all it needs:
    - CLAUDE.md rule: the exact line, and which file (`~/.claude/CLAUDE.md` or a project's).
@@ -89,6 +92,6 @@ The plan printed by `recap.py` names every file and script used below. `FT` stan
 
 11. **Notify, only if the plan's `notify` is true.** One push notification, one line under 200 characters, no markdown: `Coach weekly review ready: N proposals waiting for your yes.` If the week was clean, send nothing.
 
-12. **Reply**, in this order and with nothing else: the page link on its own line (only if `page_url` is set); the follow-through lines; one line with the week's cost and the top three projects by cost; the "What cost the most" lines; the list of proposals as `P1: name` with one line each; then the single question `Apply which? (for example: P1 P3, all, none)`. If the week was clean, reply with one line that says so. In a run marked `unattended` (the plan's `unattended` is true or `fixes.apply_allowed` is false), leave the question out and stop here: nothing is previewed, applied or undone.
+12. **Reply**, in this order and with nothing else: the page link on its own line (only if `page_url` is set); the follow-through lines; `Totals:` and under it one `- ` bullet for the week's cost and one for the top three projects by cost; the "What cost the most" lines without their `Evidence:` lines (no tag, session id or cost); the list of proposals as `P1: name` with one line each; then the single question `Apply which? (for example: P1 P3, all, none)`. If the week was clean, reply with one line that says so. In a run marked `unattended` (the plan's `unattended` is true or `fixes.apply_allowed` is false), leave the question out and stop here: nothing is previewed, applied or undone.
 
 13. **Stop there.** If the user later answers with a yes for specific proposals, follow `applyfix.md`: only the proposals they picked; a CLAUDE.md line, a permission rule or a hook goes through `applyfix preview`, a yes for that one fix after its diff, then `applyfix apply <key> --person-said-yes --plan <the plan's plan_file>`, one at a time; anything else (a skill, a plugin, a connector, a scheduled task, removing or moving a file) is not applied by the coach: give the text to paste or the command to run. After each fix that landed, or each change the person confirms they made by hand, run `FT applied --report <the weekly report> --proposal Pn`, so next week's follow-through can say whether the number moved. Leave the rest untouched.

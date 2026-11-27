@@ -14,7 +14,7 @@ The plan printed by `recap.py` names every file and script used below. `FT` stan
 
 3. **New or repeat (follow-through).** Run `FT annotate --findings <the plan's findings>`, adding `--text "<your planned Do instead line>"` for each item of your own, as `followthrough.md` steps 1 to 3 say. Keep each row's `key`, `status` and `marker`. Read the files under `last_three_daily_reports` too: a `RECURRING` candidate goes in only if it happened again in this period.
 
-4. **Rank by cost**, most costly first. Cost means wasted tokens, wasted minutes, or rework. Dollars make this concrete: each session in the digest has `cost` (and `subagents.cost`), the digest has `totals.cost` and a `projects` list sorted by cost. Whenever an item quotes tokens, quote the cost in the same line, for example `3.0M output tokens, about $45`, using those figures only. Skip scheduled-task sessions unless one failed or was wasteful.
+4. **Rank by cost**, most costly first. Cost means wasted tokens, wasted minutes, or rework. Dollars make this concrete: each session in the digest has `cost` (and `subagents.cost`), the digest has `totals.cost` and a `projects` list sorted by cost. Use them to order the items only: an item never prints a dollar figure or an "about $N" phrase. A token count may stand on its own, for example `3.0M output tokens`. Skip scheduled-task sessions unless one failed or was wasteful.
 
 5. **Verify the top candidates (evidence).** Follow `evidence.md` steps 1 to 5: run the plan's `evidence` command (`python3` plus that list) to build the candidates, add your own items with `EV find`, verify at most eight, most costly first, and merge the verdicts. From here on work only from the merge's `items`: a dropped item never appears anywhere, a corrected item uses the corrected wording.
 
@@ -23,23 +23,26 @@ The plan printed by `recap.py` names every file and script used below. `FT` stan
    ```
    # Coach: YYYY-MM-DD
 
-   1. What happened: one line with the project and the number (session 1a2b3c4d, turn 41, 13:39) (repeat of YYYY-MM-DD, given N times)
+   1. What happened: one line with the project and the number (repeat of YYYY-MM-DD, given N times)
       Do instead: one line, the concrete action or feature.
+      Evidence: session 1a2b3c4d, turn 41, 13:39
    2. ...
 
-   Totals: (the plan's totals_line)
-   Estimates: (the plan's estimates_line, only when it is not null)
+   Totals:
+   - (the plan's totals_block, copied exactly: one bullet per total)
+   Estimates:
+   - (the plan's estimates_block, copied exactly, only when it is not null)
    Checked: N items against the transcripts.
    ```
 
-   - Two lines per item, never more. At most five items. For a range, give the date with the time.
-   - `What happened:` ends with the item's evidence tag in round brackets, exactly as `evidence.py` gave it (`session 1a2b3c4d, turn 41, 13:39`, or `turns 41 to 47, 13:39 to 14:02`, or `session 1a2b3c4d, evidence no longer on disk`). The tag carries the session id and the time, so do not write them a second time. After the tag, only for a `RECURRING` row, comes its `marker` from step 3, for example `(repeat of 2026-11-10, given 3 times)`. A `NEW` item has no marker.
-   - Do not write a per-item `Evidence:` line: the page works out the command to open the evidence from the tag.
-   - After the items, one blank line, then the plan's `totals_line`, copied exactly. It starts with the label `Totals:`.
-   - When the plan's `estimates_line` is not null, it comes on the next line, copied exactly. It starts with the label `Estimates:` and gives, per model, the pieces of work with a stated actual, the minutes estimated and taken, and the overrun. When it is null, leave the line out. It is not an item.
-   - The last line is `Checked: N items against the transcripts.`, with the merge's `totals_line` added only when something was dropped: `Checked: 4 items against the transcripts, 2 candidates dropped on verification.` Neither line is an item or counts toward the five.
-   - Keep the labels `What happened:`, `Do instead:`, `Totals:`, `Estimates:` and `Checked:` exactly as written, at the start of their line, with no bold or other markup. The coach page (`coach/build_site.py`) parses these lines.
-   - If nothing is notable after verification, the body is the single line `Nothing notable on YYYY-MM-DD.` (for a range: `Nothing notable from YYYY-MM-DD to YYYY-MM-DD.`), a blank line, the `totals_line`, the `estimates_line` when it is not null, and the `Checked:` line only if candidates were dropped.
+   - Three lines per item, never more. At most five items. For a range, give the date.
+   - `What happened:` says what happened, in which project, and the number that makes it costly. It carries no session id, no clock times in brackets, no evidence tag and no cost figure (no `$`, no "about $N plus $M in subagents"). Only for a `RECURRING` row, it ends with its `marker` from step 3, for example `(repeat of 2026-11-10, given 3 times)`. A `NEW` item has no marker.
+   - `Evidence:` is the third line of every item: the item's evidence tag, bare, exactly as `evidence.py` gave it (`session 1a2b3c4d, turn 41, 13:39`, or `session 1a2b3c4d, turns 41 to 47, 13:39 to 14:02`, or `session 1a2b3c4d, evidence no longer on disk`), with no brackets and no command. The page uses it to build the command and the excerpt and does not show it as part of the tip.
+   - After the items, one blank line, then the plan's `totals_block`, copied exactly: the line `Totals:` and one `- ` bullet per total under it.
+   - When the plan's `estimates_block` is not null, it comes right after, copied exactly: the line `Estimates:` and one `- ` bullet per model (the pieces of work with a stated actual, the minutes estimated and taken, and the overrun), then the `Not counted:` bullet when there is one. When it is null, leave it out. It is not an item.
+   - The last line is `Checked: N items against the transcripts.`, with the merge's `totals_line` added only when something was dropped: `Checked: 4 items against the transcripts, 2 candidates dropped on verification.` None of these blocks is an item or counts toward the five.
+   - Keep the labels `What happened:`, `Do instead:`, `Evidence:`, `Totals:`, `Estimates:` and `Checked:` exactly as written, at the start of their line, with no bold or other markup. The coach page (`coach/build_site.py`) parses these lines.
+   - If nothing is notable after verification, the body is the single line `Nothing notable on YYYY-MM-DD.` (for a range: `Nothing notable from YYYY-MM-DD to YYYY-MM-DD.`), a blank line, the `totals_block`, the `estimates_block` when it is not null, and the `Checked:` line only if candidates were dropped.
 
 7. **Record the advice.** Run `FT record --report <the plan's report> --key 1=<key> --key 2=<key>` with the keys kept in step 3, as `followthrough.md` step 4 says. Run it for a "Nothing notable" report too.
 
@@ -49,6 +52,6 @@ The plan printed by `recap.py` names every file and script used below. `FT` stan
 
 10. **Notify, only if the plan's `notify` is true.** One push notification, one line under 200 characters, no markdown: `Coach: N tips ready. Top: ` followed by the first item's Do instead line, shortened to fit. If nothing was notable, send nothing.
 
-11. **Reply with the items only**: the same lines as the report (the `Totals:`, `Estimates:` and `Checked:` lines included), nothing before or after. Then, when at least one item has a tag on disk, one line: `Evidence: python3 <the real plugin folder>/coach/evidence.py show <session> --turn <turn>` (the numbers are in each item's tag). If `page_url` is set, add that link on its own line last; if it is null, say nothing about the page. If nothing was notable, reply with that one line.
+11. **Reply with the items only**: the same lines as the report, without the `Evidence:` lines (each item is its `What happened:` and `Do instead:` lines, with no tag, session id or cost), then the `Totals:` block and the `Estimates:` block as lists, one bullet per total, exactly as in the report, and the `Checked:` line. Nothing before or after, and no command to open the evidence. If `page_url` is set, add that link on its own line last; if it is null, say nothing about the page. If nothing was notable, reply with that one line.
 
 Steps 3, 5, 7, 8, 9 and 10 are the only actions allowed beyond reading and writing the report. If the person then asks to apply an item ("add that rule for me"), follow `applyfix.md`; never in a run marked `unattended`.

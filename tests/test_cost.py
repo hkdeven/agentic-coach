@@ -551,6 +551,11 @@ class RecapCostTest(Base):
         self.assertIn("Unpriced: 1k tokens.", line)
         self.assertIn("Week to date: $61.", line)
         self.assertIn("All time since 2026-11-10: $71.", line)   # the seed took in day 2 as well
+        block = out["totals_block"].split("\n")
+        self.assertEqual(block[0], "Totals:")
+        self.assertRegex(block[1], r"^- Tokens: 17(\.\d)?M \(3(\.\d)?M output\), about \$61 API-equivalent$")
+        self.assertEqual(block[2:], ["- Top projects: alpha $57, beta $4.00", "- Unpriced: 1k tokens",
+                                     "- Week to date: $61", "- All time since 2026-11-10: $71"])
         self.assertNotIn("cost_block", out)
         again = recap.build([], today=today, projects_dir=self.projects)
         self.assertFalse(again["ledger_seeded_now"])
@@ -563,6 +568,7 @@ class RecapCostTest(Base):
         self.assertIn("All time is since 2026-11-10.", block[-1])
         self.assertIn("not a bill", block[-1])
         self.assertNotIn("totals_line", week)
+        self.assertNotIn("totals_block", week)
 
     def test_report_lines_are_parsed_for_the_page(self):
         two_days(self.projects)
@@ -570,6 +576,10 @@ class RecapCostTest(Base):
         text = ("# Coach: 2026-11-10\n\n1. What happened: aaaaaaaa, alpha, 12:00: 2M output tokens, about $20.\n"
                 "   Do instead: one thing.\n\n" + day["totals_line"] + "\n")
         parsed = build_site.parse_daily(text)
+        listed = build_site.parse_daily(text.replace(day["totals_line"], day["totals_block"]))
+        self.assertEqual(listed["items"][0]["do"], "One thing.")       # the bullets are not glued on
+        self.assertEqual(listed["totals_list"], [x[2:] for x in day["totals_block"].split("\n")[1:]])
+        self.assertEqual(listed["totals_list"], parsed["totals_list"])  # both forms read the same
         self.assertEqual(len(parsed["items"]), 1)
         self.assertEqual(parsed["items"][0]["do"], "One thing.")       # the totals line is not glued on
         self.assertRegex(parsed["totals"], r"^17(\.\d)?M tokens \(3(\.\d)?M output\), about \$61")
